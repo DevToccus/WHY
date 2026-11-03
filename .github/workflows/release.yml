@@ -66,5 +66,5 @@ jobs:
           Built from commit $env:GITHUB_SHA. See VERSIONS.md for how to get this version again.
 
           The executable is not signed yet, so SmartScreen may warn when it first runs.
-          "@ -replace '(?m)^\s+', ''
+          "@
           gh release create $env:GITHUB_REF_NAME dist/why.exe dist/why.exe.sha256 --title $env:RELEASE_NAME --notes $notes
