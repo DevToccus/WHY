@@ -1,0 +1,530 @@
+#include "core/investigator.h"
+
+#include <algorithm>
+#include <charconv>
+#include <set>
+
+#include "core/bugcheck.h"
+#include "core/signals.h"
+#include "core/text.h"
+
+namespace why {
+namespace {
+
+constexpr std::int64_t kMinute = 60'000;
+constexpr std::int64_t kDay = 24 * 60 * kMinute;
+constexpr std::int64_t kCrashWindow = 15 * kMinute;  // A crash leaves several records around one reboot.
+constexpr std::int64_t kBurstWindow = 10 * kMinute;  // Repeats this close are one incident.
+constexpr std::int64_t kChangeLookback = 14 * kDay;
+constexpr std::int64_t kRecentWindow = 7 * kDay;
+constexpr std::int64_t kLongRunningAfter = 30 * kDay;
+constexpr std::int64_t kWatchUntilResolved = 14 * kDay;
+constexpr std::int64_t kQuietAfter = 30 * kDay;
+constexpr std::size_t kMaxChain = 50;
+constexpr std::size_t kMaxOtherChanges = 5;
+constexpr int kHabitualInstalls = 3;
+constexpr int kBulkRefreshDrivers = 10;
+constexpr int kRestartsWorthAlert = 2;  // A PC going off by itself is unusual enough that twice is a pattern.
+
+struct Incident {
+    std::string key;
+    std::string signal;
+    std::string subject;
+    std::vector<Event> events;
+    const DumpInfo* dump = nullptr;
+    std::uint32_t bugCheck = 0;
+    std::int64_t startMs() const { return events.front().timeMs; }
+};
+
+const std::string& dataOf(const Event& event, const char* key) {
+    static const std::string kEmpty;
+    const auto it = event.data.find(key);
+    return it == event.data.end() ? kEmpty : it->second;
+}
+
+std::uint32_t bugCheckOfEvent(const Event& event) {
+    if (event.provider == "Microsoft-Windows-Kernel-Power") {
+        const auto& text = dataOf(event, "BugcheckCode");
+        std::uint32_t code = 0;
+        std::from_chars(text.data(), text.data() + text.size(), code);
+        return code;
+    }
+    if (event.signal == "bsod") return bugCheckFromReport(dataOf(event, "param1"));
+    return 0;
+}
+
+Event eventFromDump(const DumpInfo& dump) {
+    Event event;
+    event.channel = "Crash dump";
+    event.timeMs = dump.timeMs;
+    event.provider = "Crash dump";
+    event.signal = "bsod";
+    event.subject = dump.module;
+    event.message = "Crash dump " + dump.fileName + " records stop code " + hexCode(dump.bugCheck) + ".";
+    return event;
+}
+
+// One blue screen leaves a dump, a WER report and a Kernel-Power record minutes apart. They are one incident.
+std::vector<Incident> buildCrashIncidents(const std::vector<Event>& problems, const std::vector<DumpInfo>& dumps) {
+    struct Item {
+        Event event;
+        const DumpInfo* dump;
+    };
+    std::vector<Item> items;
+    for (const auto& event : problems) {
+        if (event.signal == "bsod" || event.signal == "unexpected_restart") items.push_back({event, nullptr});
+    }
+    for (const auto& dump : dumps) items.push_back({eventFromDump(dump), &dump});
+    std::stable_sort(items.begin(), items.end(),
+                     [](const Item& a, const Item& b) { return a.event.timeMs < b.event.timeMs; });
+
+    std::vector<Incident> incidents;
+    for (const auto& item : items) {
+        if (incidents.empty() || item.event.timeMs - incidents.back().events.back().timeMs > kCrashWindow) {
+            incidents.emplace_back();
+        }
+        auto& incident = incidents.back();
+        incident.events.push_back(item.event);
+        if (item.dump) incident.dump = item.dump;
+        if (!incident.bugCheck) incident.bugCheck = bugCheckOfEvent(item.event);
+    }
+
+    for (auto& incident : incidents) {
+        if (incident.dump) incident.bugCheck = incident.dump->bugCheck;
+        if (incident.bugCheck) {
+            incident.signal = "bsod";
+            incident.subject = incident.dump ? moduleStem(incident.dump->module) : "";
+            incident.key = "bsod:" + hexCode(incident.bugCheck) + ":" + incident.subject;
+        } else {
+            incident.signal = "unexpected_restart";
+            incident.key = "unexpected_restart";
+        }
+    }
+    return incidents;
+}
+
+std::vector<Incident> buildIncidents(const std::vector<Event>& events, const std::vector<DumpInfo>& dumps) {
+    std::vector<Event> problems;
+    for (const auto& event : events) {
+        if (event.role == Role::Problem) problems.push_back(event);
+    }
+    std::stable_sort(problems.begin(), problems.end(),
+                     [](const Event& a, const Event& b) { return a.timeMs < b.timeMs; });
+
+    auto incidents = buildCrashIncidents(problems, dumps);
+
+    std::map<std::string, std::size_t> lastOfKey;
+    for (const auto& event : problems) {
+        if (event.signal == "bsod" || event.signal == "unexpected_restart") continue;
+        const std::string key = event.signal + ":" + toLower(event.subject);
+        const auto it = lastOfKey.find(key);
+        if (it != lastOfKey.end() && event.timeMs - incidents[it->second].events.back().timeMs <= kBurstWindow) {
+            incidents[it->second].events.push_back(event);
+            continue;
+        }
+        Incident incident;
+        incident.key = key;
+        incident.signal = event.signal;
+        incident.subject = event.subject;
+        incident.events.push_back(event);
+        incidents.push_back(std::move(incident));
+        lastOfKey[key] = incidents.size() - 1;
+    }
+    return incidents;
+}
+
+const DriverInfo* findDriver(const std::vector<DriverInfo>& drivers, const std::string& stem) {
+    if (stem.empty()) return nullptr;
+    for (const auto& driver : drivers) {
+        if (moduleStem(driver.module) == stem || toLower(driver.service) == stem) return &driver;
+    }
+    return nullptr;
+}
+
+std::string pluralize(int count, const char* one, const char* many) {
+    return std::to_string(count) + " " + (count == 1 ? one : many);
+}
+
+std::string daysBetween(std::int64_t earlier, std::int64_t later) {
+    const auto days = (later - earlier) / kDay;
+    if (days <= 0) return "the same day as";
+    return pluralize(static_cast<int>(days), "day", "days") + " before";
+}
+
+// ---- Case text. Everything stated here must be backed by what the logs actually hold. ----
+
+void describeBsod(Case& c, const Incident& latest, const std::vector<DriverInfo>& drivers) {
+    const auto info = bugCheckInfo(latest.bugCheck);
+    c.title = "Blue screen: " + info.name;
+    c.summary = info.plain;
+    c.findings.push_back({Certainty::Verified, "Windows stopped with " + info.name + " (" + hexCode(latest.bugCheck) +
+                                                   ") " + pluralize(c.incidents, "time", "times") + "."});
+    if (latest.dump && !latest.dump->module.empty()) {
+        const bool direct = latest.dump->moduleEvidence == "parameter";
+        c.findings.push_back({direct ? Certainty::Probable : Certainty::Correlated,
+                              direct ? "The stop code points directly at " + latest.dump->module +
+                                           ". The module named is often the cause, but it can also be the victim."
+                                     : latest.dump->module +
+                                           " was found on the kernel stack at the moment of the crash. "
+                                           "This shows it was active, not that it was responsible."});
+        c.causeSupported = direct;
+        if (const auto* driver = findDriver(drivers, moduleStem(latest.dump->module))) {
+            c.title = "Blue screen involving " + (driver->displayName.empty() ? driver->module : driver->displayName);
+        }
+    } else if (!latest.dump) {
+        c.findings.push_back({Certainty::Correlated,
+                              "No crash dump was available to name the responsible module. "
+                              "Run WHY? as administrator to read dumps, if Windows kept any."});
+    }
+    switch (info.hint) {
+        case BugCheckHint::Hardware:
+            c.advice.push_back({"Check for overheating and unstable overclock settings, then test the hardware.", ""});
+            break;
+        case BugCheckHint::Memory:
+            c.advice.push_back({"Test the RAM with Windows Memory Diagnostic.", "memory_diagnostic"});
+            break;
+        case BugCheckHint::Storage:
+            c.advice.push_back({"Back up your data, then check the disk and its cable.", ""});
+            break;
+        case BugCheckHint::Graphics:
+            c.advice.push_back({"Update or roll back the graphics driver from Device Manager.", "device_manager"});
+            break;
+        default:
+            c.advice.push_back({"Update or roll back the driver named above from Device Manager.", "device_manager"});
+            break;
+    }
+}
+
+void describeRestart(Case& c, const std::vector<Incident>& incidents) {
+    c.title = "Windows restarted without shutting down";
+    c.summary = "The PC went off or restarted without a clean shutdown, and no blue screen was recorded.";
+    c.findings.push_back({Certainty::Verified, "Windows recorded " + pluralize(c.incidents, "restart", "restarts") +
+                                                   " without a clean shutdown and without a stop code."});
+    bool powerButton = false;
+    bool duringSleep = false;
+    for (const auto& incident : incidents) {
+        for (const auto& event : incident.events) {
+            const auto& pressed = dataOf(event, "PowerButtonTimestamp");
+            if ((!pressed.empty() && pressed != "0") || dataOf(event, "LongPowerButtonPressDetected") == "true") {
+                powerButton = true;
+            }
+            const auto& sleeping = dataOf(event, "SleepInProgress");
+            if (!sleeping.empty() && sleeping != "0") duringSleep = true;
+        }
+    }
+    if (powerButton) {
+        c.findings.push_back({Certainty::Probable, "The power button was held down, so someone may have forced it off."});
+        c.causeSupported = true;
+    }
+    if (duringSleep) {
+        c.findings.push_back({Certainty::Verified, "At least one restart happened while the PC was entering or leaving sleep."});
+    }
+    c.findings.push_back({Certainty::Correlated,
+                          "Common reasons are a power cut, an unstable power supply, overheating or a complete freeze. "
+                          "The logs cannot tell these apart."});
+    c.advice.push_back({"If nobody turned the PC off, check the power cable, supply and temperatures.", ""});
+    c.advice.push_back({"See when this started in Reliability Monitor.", "reliability_monitor"});
+}
+
+void describeGpu(Case& c) {
+    const std::string driver = c.subject.empty() ? "graphics driver" : c.subject;
+    c.title = "Graphics driver stopped responding: " + driver;
+    c.summary = "Windows or the graphics driver reported that the GPU stopped responding.";
+    c.findings.push_back({Certainty::Verified, "The graphics driver " + driver + " reported a problem " +
+                                                   pluralize(c.incidents, "time", "times") + "."});
+    c.advice.push_back({"Update or roll back the graphics driver from Device Manager.", "device_manager"});
+    c.advice.push_back({"If it happens under load, check GPU temperature and power cables.", ""});
+}
+
+void describeWhea(Case& c, bool fatal) {
+    c.title = fatal ? "Hardware reported a fatal error" : "Hardware reported errors it corrected";
+    c.summary = fatal ? "A component reported an error it could not recover from."
+                      : "A component had errors. It corrected them, but repeats can announce a failure.";
+    c.findings.push_back({Certainty::Verified, "Windows Hardware Error Architecture logged this " +
+                                                   pluralize(c.incidents, "time", "times") + "."});
+    c.advice.push_back({"Remove any overclock and check CPU, RAM and motherboard temperatures.", ""});
+    c.advice.push_back({"Test the RAM with Windows Memory Diagnostic.", "memory_diagnostic"});
+}
+
+void describeDisk(Case& c, const std::string& signal) {
+    const std::string device = c.subject.empty() ? "A disk" : c.subject;
+    if (signal == "disk_failure_predicted") {
+        c.title = "Disk predicts its own failure";
+        c.summary = "The disk reports that it expects to fail soon.";
+    } else if (signal == "filesystem_corruption") {
+        c.title = "File system corruption detected";
+        c.summary = "Windows found damaged file system structures on a volume.";
+    } else if (signal == "disk_error") {
+        c.title = "Disk read or write errors";
+        c.summary = "Windows could not complete some operations on a disk.";
+    } else if (signal == "disk_retry") {
+        c.title = "Disk operations had to be retried";
+        c.summary = "Windows had to repeat some disk operations.";
+    } else {
+        c.title = "Storage controller reset a device";
+        c.summary = "A disk stopped responding for long enough that Windows reset it.";
+    }
+    c.findings.push_back({Certainty::Verified, device + ": recorded " + pluralize(c.incidents, "time", "times") + "."});
+    c.advice.push_back({"Back up important data now.", ""});
+    c.advice.push_back({"Check the disk and its cable, and read its health with the manufacturer's tool.", ""});
+}
+
+void describeDriverLoad(Case& c) {
+    const std::string driver = c.subject.empty() ? "A driver" : c.subject;
+    c.title = "Driver failed to load: " + driver;
+    c.summary = "Windows tried to load a driver during startup and could not.";
+    c.findings.push_back({Certainty::Verified, driver + " failed to load " + pluralize(c.incidents, "time", "times") + "."});
+    c.advice.push_back({"If a device is not working, look for it in Device Manager and reinstall its driver.", "device_manager"});
+}
+
+void describeService(Case& c) {
+    const std::string service = c.subject.empty() ? "A service" : c.subject;
+    c.title = "Service stopped unexpectedly: " + service;
+    c.summary = "A Windows service ended without being asked to.";
+    c.findings.push_back({Certainty::Verified, service + " stopped unexpectedly " + pluralize(c.incidents, "time", "times") + "."});
+    c.advice.push_back({"If something depends on this service, update or reinstall the program it belongs to.", "services"});
+}
+
+// ---- What changed before the case began ----
+
+bool sameModule(const Change& change, const std::string& stem) {
+    if (stem.empty()) return false;
+    return moduleStem(change.module) == stem || toLower(change.name) == stem;
+}
+
+std::string describeChange(const Change& change) {
+    std::string text = change.name;
+    if (!change.oldVersion.empty() && !change.newVersion.empty()) {
+        text += " (" + change.oldVersion + " to " + change.newVersion + ")";
+    } else if (!change.newVersion.empty()) {
+        text += " (" + change.newVersion + ")";
+    }
+    return text;
+}
+
+// A driver change is a plausible lead for these. A service crashing is not explained by an unrelated driver.
+bool unrelatedChangesMatter(std::string_view signal) {
+    return signal != "service_crash" && signal != "driver_load_failed";
+}
+
+void linkChanges(Case& c, const std::string& stem, const std::vector<Change>& changes, std::int64_t historyStartMs) {
+    std::vector<Change> sorted = changes;
+    std::sort(sorted.begin(), sorted.end(), [](const Change& a, const Change& b) { return a.timeMs > b.timeMs; });
+
+    // A change near the very start of the logs says little: earlier incidents may simply have aged out.
+    const bool historyReachesBack = c.firstMs - historyStartMs >= kChangeLookback;
+
+    // Some programs re-register their own driver every time they start. That is a habit, not a change.
+    std::map<std::string, int> installsByName;
+    // Many driver folders dated the same day mean Windows refreshed them all at once, not that each one changed.
+    std::map<std::int64_t, int> storeDatesByDay;
+    for (const auto& change : changes) {
+        if (change.source == "service_install") ++installsByName[change.name];
+        if (change.source == "driver_store") ++storeDatesByDay[change.timeMs / kDay];
+    }
+    const auto isBackground = [&](const Change& change) {
+        if (change.source == "service_install" && installsByName[change.name] >= kHabitualInstalls) return true;
+        return change.source == "driver_store" && storeDatesByDay[change.timeMs / kDay] >= kBulkRefreshDrivers;
+    };
+
+    std::vector<Change> others;
+    bool directFound = false;
+    for (const auto& change : sorted) {
+        const bool direct = sameModule(change, stem);
+        const bool beforeFirst = change.timeMs <= c.firstMs && c.firstMs - change.timeMs <= kChangeLookback;
+        const bool duringCase = change.timeMs > c.firstMs && change.timeMs <= c.lastMs;
+        if (direct && (beforeFirst || duringCase)) {
+            c.changesBefore.push_back(change);
+            if (directFound) continue;
+            directFound = true;
+            const std::string when = change.estimated ? "about " : "";
+            if (beforeFirst && historyReachesBack) {
+                c.findings.push_back({Certainty::Probable,
+                                      describeChange(change) + " changed " + when + daysBetween(change.timeMs, c.firstMs) +
+                                          " the first occurrence, and no earlier occurrence is on record."});
+                c.causeSupported = true;
+            } else if (beforeFirst) {
+                c.findings.push_back({Certainty::Correlated,
+                                      describeChange(change) + " changed " + when + daysBetween(change.timeMs, c.firstMs) +
+                                          " the first occurrence on record, but the logs do not reach far enough back to "
+                                          "know whether it was already happening."});
+            } else {
+                c.findings.push_back({Certainty::Correlated,
+                                      describeChange(change) + " changed after this problem had already started, "
+                                                               "so that change did not start it."});
+            }
+        } else if (!direct && beforeFirst && unrelatedChangesMatter(c.signal) && !isBackground(change)) {
+            others.push_back(change);
+        }
+    }
+
+    std::stable_sort(others.begin(), others.end(), [](const Change& a, const Change& b) {
+        const auto isDriver = [](const Change& x) { return x.kind != "update_installed"; };
+        return isDriver(a) > isDriver(b);
+    });
+    if (others.size() > kMaxOtherChanges) others.resize(kMaxOtherChanges);
+    if (!others.empty()) {
+        c.findings.push_back({Certainty::Correlated,
+                              pluralize(static_cast<int>(others.size()), "other change", "other changes") +
+                                  " happened in the two weeks before. Timing alone does not make them the cause."});
+        c.changesBefore.insert(c.changesBefore.end(), others.begin(), others.end());
+    }
+}
+
+void applyStatusAndAlert(Case& c, const std::vector<Incident>& incidents, const InvestigationInput& input) {
+    const auto now = input.nowMs;
+    c.longRunning = now - c.firstMs >= kLongRunningAfter && c.incidents >= 4;
+
+    const CaseOverride* latest = nullptr;
+    for (const auto& item : input.overrides) {
+        if (item.key == c.key && (!latest || item.atMs >= latest->atMs)) latest = &item;
+    }
+    if (latest && latest->action == "tried_fix") {
+        const bool recurred = std::any_of(incidents.begin(), incidents.end(), [&](const Incident& incident) {
+            return incident.startMs() > latest->atMs;
+        });
+        c.status = recurred                                   ? CaseStatus::Recurred
+                   : now - latest->atMs >= kWatchUntilResolved ? CaseStatus::Resolved
+                                                               : CaseStatus::Watching;
+    } else if (now - c.lastMs >= kQuietAfter) {
+        c.status = CaseStatus::Quiet;
+    } else {
+        c.status = CaseStatus::Open;
+    }
+
+    if (c.status == CaseStatus::Recurred) {
+        c.alert = "repeating";
+        return;
+    }
+    if (c.status != CaseStatus::Open || now - c.lastMs >= kRecentWindow) return;
+
+    const int recent = c.incidentsLast7Days;
+    const auto earlierSpan = std::max<std::int64_t>(now - kRecentWindow - c.firstMs, kDay);
+    const double earlierPerWeek =
+        static_cast<double>(c.incidents - recent) * static_cast<double>(kRecentWindow) / static_cast<double>(earlierSpan);
+
+    if (c.severity == Severity::Critical) c.alert = "severe";
+    else if (now - c.firstMs < kRecentWindow && c.severity == Severity::Warning) c.alert = "new";
+    else if (c.signal == "unexpected_restart" && c.incidents >= kRestartsWorthAlert) c.alert = "repeating";
+    else if (c.longRunning) {
+        if (recent >= 3 && recent >= 3.0 * earlierPerWeek) c.alert = "increased";
+    } else if (recent >= 3) {
+        c.alert = "repeating";
+    }
+}
+
+}  // namespace
+
+std::vector<Change> changesFromEvents(const std::vector<Event>& events) {
+    std::vector<Change> changes;
+    for (const auto& event : events) {
+        if (event.role != Role::Change) continue;
+        Change change;
+        change.timeMs = event.timeMs;
+        change.name = event.subject;
+        if (event.signal == "driver_service_installed") {
+            change.kind = "driver_installed";
+            change.source = "service_install";
+            const auto& image = dataOf(event, "ImagePath");
+            const auto slash = image.find_last_of("\\/");
+            change.module = toLower(slash == std::string::npos ? image : image.substr(slash + 1));
+        } else {
+            change.kind = isDriverUpdateTitle(event.subject) ? "driver_updated" : "update_installed";
+            change.source = "windows_update";
+        }
+        changes.push_back(std::move(change));
+    }
+    return changes;
+}
+
+std::vector<Case> investigate(const InvestigationInput& input) {
+    const auto incidents = buildIncidents(input.events, input.dumps);
+
+    std::map<std::string, std::vector<const Incident*>> byKey;
+    for (const auto& incident : incidents) byKey[incident.key].push_back(&incident);
+
+    std::set<std::string> recentBsodKinds;
+    for (const auto& incident : incidents) {
+        if (incident.signal == "bsod" && input.nowMs - incident.startMs() <= kLongRunningAfter) {
+            recentBsodKinds.insert(incident.key);
+        }
+    }
+
+    std::vector<Case> cases;
+    for (auto& [key, group] : byKey) {
+        std::sort(group.begin(), group.end(),
+                  [](const Incident* a, const Incident* b) { return a->startMs() < b->startMs(); });
+        const Incident& latest = *group.back();
+        const SignalInfo* info = signalInfo(latest.signal);
+
+        Case c;
+        c.key = key;
+        c.signal = latest.signal;
+        c.subject = latest.subject;
+        c.area = info->area;
+        c.severity = info->severity;
+        c.firstMs = group.front()->startMs();
+        c.lastMs = latest.events.back().timeMs;
+        c.incidents = static_cast<int>(group.size());
+        std::vector<Incident> flat;
+        for (const auto* incident : group) {
+            flat.push_back(*incident);
+            if (input.nowMs - incident->startMs() <= kRecentWindow) ++c.incidentsLast7Days;
+            for (const auto& event : incident->events) c.chain.push_back(event);
+        }
+        if (c.chain.size() > kMaxChain) c.chain.erase(c.chain.begin(), c.chain.end() - kMaxChain);
+
+        const std::string_view signal = c.signal;
+        if (signal == "bsod") {
+            describeBsod(c, latest, input.drivers);
+            if (bugCheckInfo(latest.bugCheck).hint == BugCheckHint::Graphics) c.area = Area::Driver;
+            else if (bugCheckInfo(latest.bugCheck).hint == BugCheckHint::Hardware) c.area = Area::Hardware;
+            else if (latest.dump && !latest.dump->module.empty()) c.area = Area::Driver;
+            if (recentBsodKinds.size() >= 3) {
+                c.findings.push_back({Certainty::Correlated,
+                                      pluralize(static_cast<int>(recentBsodKinds.size()), "different blue screen", "different blue screens") +
+                                          " in 30 days. Varied crashes often share one cause, such as RAM, power or heat, "
+                                          "rather than one driver."});
+                c.advice.push_back({"Test the RAM with Windows Memory Diagnostic.", "memory_diagnostic"});
+            }
+        } else if (signal == "unexpected_restart") {
+            describeRestart(c, flat);
+        } else if (signal == "gpu_reset") {
+            describeGpu(c);
+        } else if (signal == "whea_fatal" || signal == "whea_corrected") {
+            describeWhea(c, signal == "whea_fatal");
+        } else if (signal == "driver_load_failed") {
+            describeDriverLoad(c);
+        } else if (signal == "service_crash") {
+            describeService(c);
+        } else {
+            describeDisk(c, c.signal);
+        }
+
+        // Which module the case concerns, when the evidence names one.
+        std::string stem = moduleStem(c.subject);
+        if (signal == "service_crash" || signal.starts_with("disk") || signal == "storage_reset") stem.clear();
+        if (const auto* driver = findDriver(input.drivers, stem)) {
+            if (!driver->version.empty()) {
+                c.findings.push_back({Certainty::Verified, "Installed driver: " +
+                                                               (driver->displayName.empty() ? driver->module : driver->displayName) +
+                                                               ", version " + driver->version +
+                                                               (driver->provider.empty() ? "" : " by " + driver->provider) + "."});
+            }
+        }
+        linkChanges(c, stem, input.changes, input.historyStartMs);
+
+        if (const auto it = input.activity.find(key); it != input.activity.end()) c.activity = it->second;
+        applyStatusAndAlert(c, flat, input);
+        cases.push_back(std::move(c));
+    }
+
+    const auto rank = [](const Case& c) {
+        const int status = c.alert.empty() ? (c.status == CaseStatus::Open ? 1 : 2) : 0;
+        return std::make_tuple(status, -static_cast<int>(c.severity), -c.lastMs);
+    };
+    std::sort(cases.begin(), cases.end(), [&](const Case& a, const Case& b) { return rank(a) < rank(b); });
+    return cases;
+}
+
+}  // namespace why

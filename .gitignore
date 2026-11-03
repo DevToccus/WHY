@@ -1,0 +1,7 @@
+build/
+ui/node_modules/
+ui/dist/
+*.user
+*.whyreport.json
+.claude/
+ui/public/

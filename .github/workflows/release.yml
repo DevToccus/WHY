@@ -1,0 +1,70 @@
+# Builds a named version from its tag and publishes it, so every release can be traced to one commit.
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*-*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-2022
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check the tag matches the project
+        id: version
+        run: |
+          $cmake = Get-Content CMakeLists.txt -Raw
+          $version = [regex]::Match($cmake, 'project\(WHY VERSION ([\d.]+)').Groups[1].Value
+          $codename = [regex]::Match($cmake, 'set\(WHY_CODENAME "([^"]+)"\)').Groups[1].Value
+          $expected = "v$version-$($codename.ToLowerInvariant())"
+          if ($env:GITHUB_REF_NAME -cne $expected) {
+            Write-Error "Tag $env:GITHUB_REF_NAME does not match CMakeLists.txt, which expects $expected."
+            exit 1
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "name=WHY - $codename" >> $env:GITHUB_OUTPUT
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Install interface dependencies
+        run: npm ci
+        working-directory: ui
+
+      - name: Build
+        run: ./scripts/build.ps1 -Preset release
+
+      - name: Test
+        run: ./build/release/why_tests.exe
+
+      - name: Prepare files
+        run: |
+          New-Item -ItemType Directory dist | Out-Null
+          Copy-Item build/release/why.exe dist/why.exe
+          $hash = (Get-FileHash dist/why.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  why.exe" | Set-Content dist/why.exe.sha256 -NoNewline
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_NAME: ${{ steps.version.outputs.name }}
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          $notes = @"
+          $env:RELEASE_NAME, version $env:RELEASE_VERSION.
+
+          Built from commit $env:GITHUB_SHA. See VERSIONS.md for how to get this version again.
+
+          The executable is not signed yet, so SmartScreen may warn when it first runs.
+          "@ -replace '(?m)^\s+', ''
+          gh release create $env:GITHUB_REF_NAME dist/why.exe dist/why.exe.sha256 --title $env:RELEASE_NAME --notes $notes

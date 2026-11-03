@@ -1,0 +1,26 @@
+#include <winres.h>
+
+1 RT_MANIFEST "@WHY_SOURCE_DIR@/src/app/app.manifest"
+1 ICON "@WHY_SOURCE_DIR@/src/app/why.ico"
+101 RCDATA "@WHY_UI_HTML@"
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION @PROJECT_VERSION_MAJOR@,@PROJECT_VERSION_MINOR@,@PROJECT_VERSION_PATCH@,0
+PRODUCTVERSION @PROJECT_VERSION_MAJOR@,@PROJECT_VERSION_MINOR@,@PROJECT_VERSION_PATCH@,0
+FILETYPE VFT_APP
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "FileDescription", "@WHY_RELEASE_NAME@"
+            VALUE "ProductName", "@WHY_RELEASE_NAME@"
+            VALUE "FileVersion", "@PROJECT_VERSION@"
+            VALUE "ProductVersion", "@PROJECT_VERSION@"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END
