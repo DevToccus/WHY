@@ -3,7 +3,10 @@
 #include <commdlg.h>
 #include <dwmapi.h>
 #include <shellapi.h>
+#include <shlobj.h>
 #include <shlwapi.h>
+#include <psapi.h>
+#include <tlhelp32.h>
 #include <wil/com.h>
 #include <wil/resource.h>
 #include <wrl.h>
@@ -16,8 +19,14 @@
 #include <mutex>
 #include <nlohmann/json.hpp>
 #include <sstream>
+#include <map>
+#include <set>
 #include <thread>
 
+#include "app/monitor.h"
+#include "app/notify.h"
+#include "app/settings.h"
+#include "core/text.h"
 #include "engine/engine.h"
 #include "engine/pipe.h"
 #include "engine/service.h"
@@ -32,6 +41,10 @@ namespace why::app {
 namespace {
 
 constexpr UINT kPostToPage = WM_APP + 1;
+constexpr UINT kShowAlert = WM_APP + 2;
+constexpr UINT kNotifyIcon = WM_APP + 3;
+constexpr UINT kCommandOpen = 1;
+constexpr UINT kCommandExit = 2;
 constexpr const wchar_t* kOrigin = L"https://app.why/";
 constexpr const wchar_t* kClassName = L"WHYWindow";
 constexpr std::uintmax_t kMaxReportBytes = 64 * 1024 * 1024;
@@ -44,6 +57,8 @@ public:
     virtual std::string state() = 0;
     virtual std::uint64_t waitForChange(std::uint64_t known) = 0;
     virtual bool caseAction(const std::string& key, const std::string& action) = 0;
+    // The monitor's own tray notifier already announces what the monitor finds.
+    virtual bool notifies() const { return false; }
 };
 
 class RemoteBackend final : public Backend {
@@ -68,12 +83,23 @@ public:
 
 class LocalBackend final : public Backend {
 public:
-    LocalBackend() : engine_(EngineOptions{}) { engine_.start(); }
+    LocalBackend() : engine_(options()) { engine_.start(); }
     std::string state() override { return *engine_.state(); }
     std::uint64_t waitForChange(std::uint64_t known) override { return engine_.waitForChange(known, 3000); }
     bool caseAction(const std::string& key, const std::string& action) override { return engine_.applyCaseAction(key, action); }
+    bool notifies() const override { return true; }
 
 private:
+    // History stays in memory, but "I tried a fix" is the person's word and is kept in their own folder.
+    static EngineOptions options() {
+        EngineOptions options;
+        wil::unique_cotaskmem_string folder;
+        if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_LocalAppData, 0, nullptr, &folder))) {
+            options.overridesPath = std::wstring(folder.get()) + L"\\WHY\\case-fixes.jsonl";
+        }
+        return options;
+    }
+
     Engine engine_;
 };
 
@@ -105,6 +131,63 @@ std::wstring chooseFile(HWND owner, bool save) {
     return ok ? path : L"";
 }
 
+// The Windows folder picker. Empty when the person cancelled.
+std::wstring chooseFolder(HWND owner) {
+    auto dialog = wil::CoCreateInstanceNoThrow<IFileOpenDialog>(CLSID_FileOpenDialog);
+    if (!dialog) return L"";
+    FILEOPENDIALOGOPTIONS options = 0;
+    dialog->GetOptions(&options);
+    dialog->SetOptions(options | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM);
+    dialog->SetTitle(L"Choose the folder WHY? should focus on");
+    if (FAILED(dialog->Show(owner))) return L"";
+    wil::com_ptr<IShellItem> item;
+    if (FAILED(dialog->GetResult(item.put()))) return L"";
+    wil::unique_cotaskmem_string path;
+    if (FAILED(item->GetDisplayName(SIGDN_FILESYSPATH, &path))) return L"";
+    return path.get();
+}
+
+std::wstring chooseProgram(HWND owner) {
+    wchar_t path[MAX_PATH] = L"";
+    OPENFILENAMEW dialog{};
+    dialog.lStructSize = sizeof(dialog);
+    dialog.hwndOwner = owner;
+    dialog.lpstrFilter = L"Programs\0*.exe\0";
+    dialog.lpstrFile = path;
+    dialog.nMaxFile = MAX_PATH;
+    dialog.lpstrTitle = L"Choose the program WHY? should focus on";
+    dialog.Flags = OFN_NOCHANGEDIR | OFN_FILEMUSTEXIST;
+    return GetOpenFileNameW(&dialog) ? path : L"";
+}
+
+// Programs running now, outside the Windows folder, so the person can pick the one they are building.
+json runningPrograms() {
+    std::wstring windows(MAX_PATH, L'\0');
+    windows.resize(GetWindowsDirectoryW(windows.data(), MAX_PATH));
+    const std::string windowsDir = toLower(toUtf8(windows)) + "\\";
+
+    std::set<std::string> seen;
+    json list = json::array();
+    wil::unique_handle snapshot(CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0));
+    if (!snapshot || snapshot.get() == INVALID_HANDLE_VALUE) return list;
+    PROCESSENTRY32W entry{};
+    entry.dwSize = sizeof(entry);
+    for (BOOL more = Process32FirstW(snapshot.get(), &entry); more; more = Process32NextW(snapshot.get(), &entry)) {
+        wil::unique_handle process(OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, entry.th32ProcessID));
+        if (!process) continue;
+        wchar_t image[MAX_PATH]{};
+        DWORD size = MAX_PATH;
+        if (!QueryFullProcessImageNameW(process.get(), 0, image, &size)) continue;
+        const std::string path = toUtf8(image);
+        if (toLower(path).starts_with(windowsDir) || !seen.insert(toLower(path)).second) continue;
+        list.push_back({{"name", toUtf8(entry.szExeFile)}, {"path", path}});
+    }
+    std::sort(list.begin(), list.end(), [](const json& a, const json& b) {
+        return toLower(a.value("name", "")) < toLower(b.value("name", ""));
+    });
+    return list;
+}
+
 // A report may come from anywhere, so it is checked before the interface sees it.
 std::optional<std::string> loadReport(const std::wstring& path, std::string& error) {
     std::error_code code;
@@ -133,6 +216,7 @@ bool openWindowsTool(const std::string& tool) {
     else if (tool == "services") file = L"services.msc";
     else if (tool == "reliability_monitor") { file = L"perfmon.exe"; args = L"/rel"; }
     else if (tool == "memory_diagnostic") file = L"mdsched.exe";
+    else if (tool == "windows_security") file = L"windowsdefender://threat";
     else return false;
     return reinterpret_cast<INT_PTR>(ShellExecuteW(nullptr, L"open", file, args, nullptr, SW_SHOWNORMAL)) > 32;
 }
@@ -156,8 +240,8 @@ bool runElevatedAndWait(const std::wstring& arguments, DWORD& exitCode) {
 
 class AppWindow {
 public:
-    AppWindow(HINSTANCE instance, const std::optional<std::wstring>& reportPath, wil::unique_mutex_nothrow single)
-        : instance_(instance), single_(std::move(single)), startupReport_(reportPath) {}
+    AppWindow(HINSTANCE instance, const std::optional<std::wstring>& reportPath, wil::unique_mutex_nothrow single, bool background)
+        : instance_(instance), single_(std::move(single)), startupReport_(reportPath), background_(background) {}
 
     int run() {
         createWindow();
@@ -192,7 +276,42 @@ private:
         THROW_LAST_ERROR_IF_NULL(window_);
         const BOOL dark = systemUsesDarkTheme();
         DwmSetWindowAttribute(window_, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark, sizeof(dark));
-        ShowWindow(window_, SW_SHOWNORMAL);
+        // Mica, like the Windows 11 built-in tools. Older builds reject the attribute and keep the solid background.
+        constexpr DWORD kSystemBackdropType = 38;  // DWMWA_SYSTEMBACKDROP_TYPE
+        constexpr int kMainWindowBackdrop = 2;     // DWMSBT_MAINWINDOW
+        if (SUCCEEDED(DwmSetWindowAttribute(window_, kSystemBackdropType, &kMainWindowBackdrop, sizeof(kMainWindowBackdrop)))) {
+            const MARGINS whole{-1, -1, -1, -1};
+            DwmExtendFrameIntoClientArea(window_, &whole);
+            // Black is what DWM treats as see-through in an extended frame.
+            SetClassLongPtrW(window_, GCLP_HBRBACKGROUND, reinterpret_cast<LONG_PTR>(GetStockObject(BLACK_BRUSH)));
+            mica_ = true;
+        }
+        if (background_) showNotifyIcon();
+        else ShowWindow(window_, SW_SHOWNORMAL);
+    }
+
+    void showNotifyIcon() {
+        if (notifyIcon_) return;
+        addNotifyIcon(window_, kNotifyIcon, L"WHY? is watching this PC");
+        notifyIcon_ = true;
+    }
+
+    void bringToFront() {
+        ShowWindow(window_, SW_SHOW);
+        ShowWindow(window_, SW_RESTORE);
+        SetForegroundWindow(window_);
+    }
+
+    // Closing hides the window when the person chose to keep WHY? watching in the background.
+    bool hideInsteadOfClosing() {
+        if (quitting_ || !loadSettings().keepInBackground) return false;
+        ShowWindow(window_, SW_HIDE);
+        if (!notifyIcon_) {
+            showNotifyIcon();
+            showAlert(window_, {L"WHY? keeps watching in the background",
+                                L"It will tell you when something goes wrong. Right-click its icon to exit.", false, true});
+        }
+        return true;
     }
 
     void startWebView() {
@@ -241,6 +360,14 @@ private:
 #ifdef NDEBUG
         settings->put_AreDevToolsEnabled(FALSE);
 #endif
+
+        // With Mica the page is see-through, so the backdrop shows wherever the interface leaves it.
+        if (mica_) {
+            if (const auto controller2 = controller_.try_query<ICoreWebView2Controller2>()) {
+                controller2->put_DefaultBackgroundColor(COREWEBVIEW2_COLOR{0, 0, 0, 0});
+                webview_->AddScriptToExecuteOnDocumentCreated(L"document.documentElement.dataset.backdrop = 'mica';", nullptr);
+            }
+        }
 
         // The page is embedded in the executable, and nothing else may ever load.
         webview_->AddWebResourceRequestedFilter(L"*", COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL);
@@ -319,6 +446,7 @@ private:
                 if (next != rev) {
                     rev = next;
                     pushEvent("stateChanged");
+                    if (backend->notifies()) notifyFresh(backend->state());
                 }
             }
         }).detach();
@@ -332,6 +460,14 @@ private:
     std::shared_ptr<Backend> currentBackend() {
         const std::lock_guard lock(mutex_);
         return backend_;
+    }
+
+    // Problems that happen while the window is open get a banner. What was already on record is on the Home screen.
+    void notifyFresh(const std::string& state) {
+        auto alert = freshAlert(state, notifiedUpTo_, loadSettings());
+        if (!alert) return;
+        auto* owned = new Alert(std::move(*alert));
+        if (!PostMessageW(window_, kShowAlert, 0, reinterpret_cast<LPARAM>(owned))) delete owned;
     }
 
     void pushEvent(const char* name) { postToPage(json{{"event", name}}.dump()); }
@@ -372,6 +508,25 @@ private:
                 const bool ok = backend && backend->caseAction(key, action);
                 reply(id, json{{"ok", ok}}.dump());
             }).detach();
+        } else if (command == "revealPath") {
+            // Only something that exists, shown selected in File Explorer. Nothing is opened or run.
+            const std::wstring path = toWide(message.value("path", ""));
+            const DWORD attributes = GetFileAttributesW(path.c_str());
+            bool ok = false;
+            if (!path.empty() && attributes != INVALID_FILE_ATTRIBUTES) {
+                const std::wstring arguments = (attributes & FILE_ATTRIBUTE_DIRECTORY) ? L"\"" + path + L"\"" : L"/select,\"" + path + L"\"";
+                ok = reinterpret_cast<INT_PTR>(ShellExecuteW(window_, L"open", L"explorer.exe", arguments.c_str(), nullptr, SW_SHOWNORMAL)) > 32;
+            }
+            reply(id, ok ? R"({"ok":true})" : R"({"ok":false,"error":"That file or folder is no longer there."})");
+        } else if (command == "openLocalhost") {
+            // A local dev server in the default browser. The page can only name a port, never a whole address.
+            const int port = message.value("port", 0);
+            bool ok = false;
+            if (port > 0 && port < 65536) {
+                const std::wstring url = L"http://localhost:" + std::to_wstring(port) + L"/";
+                ok = reinterpret_cast<INT_PTR>(ShellExecuteW(window_, L"open", url.c_str(), nullptr, nullptr, SW_SHOWNORMAL)) > 32;
+            }
+            reply(id, json{{"ok", ok}}.dump());
         } else if (command == "openTool") {
             reply(id, json{{"ok", openWindowsTool(message.value("tool", ""))}}.dump());
         } else if (command == "saveReport") {
@@ -385,6 +540,37 @@ private:
             }
             reply(id, R"({"ok":true})");
             pushEvent("stateChanged");
+        } else if (command == "getSettings") {
+            reply(id, json{{"settings", toJson(loadSettings())}, {"elevated", isElevated()}}.dump());
+        } else if (command == "saveSettings") {
+            const Settings settings = settingsFromJson(message.value("settings", json::object()));
+            saveSettings(settings);
+            const std::string error = applyToWindows(settings);
+            reply(id, error.empty() ? R"({"ok":true})" : json{{"ok", false}, {"error", error}}.dump());
+        } else if (command == "chooseFolder") {
+            const std::wstring path = chooseFolder(window_);
+            reply(id, path.empty() ? R"({"ok":false,"cancelled":true})" : json{{"ok", true}, {"path", toUtf8(path)}}.dump());
+        } else if (command == "chooseProgram") {
+            const std::wstring path = chooseProgram(window_);
+            reply(id, path.empty() ? R"({"ok":false,"cancelled":true})" : json{{"ok", true}, {"path", toUtf8(path)}}.dump());
+        } else if (command == "listProcesses") {
+            std::thread([this, id] { reply(id, processes_.sample().dump(-1, ' ', false, json::error_handler_t::replace)); }).detach();
+        } else if (command == "systemStats") {
+            std::thread([this, id] { reply(id, system_.sample().dump(-1, ' ', false, json::error_handler_t::replace)); }).detach();
+        } else if (command == "programIcons") {
+            std::vector<std::wstring> paths;
+            if (message.contains("paths") && message["paths"].is_array()) {
+                for (const auto& path : message["paths"]) {
+                    if (path.is_string()) paths.push_back(toWide(path.get<std::string>()));
+                }
+            }
+            std::thread([this, id, paths = std::move(paths)] {
+                // The shell and WIC are COM, so this thread joins an apartment of its own.
+                const auto com = wil::CoInitializeEx(COINIT_APARTMENTTHREADED);
+                reply(id, programIcons(paths).dump(-1, ' ', false, json::error_handler_t::replace));
+            }).detach();
+        } else if (command == "listPrograms") {
+            std::thread([this, id] { reply(id, runningPrograms().dump()); }).detach();
         } else if (command == "restartElevated") {
             restartElevated(id);
         } else if (command == "installLive") {
@@ -485,7 +671,38 @@ private:
                 if (self && self->webview_) self->webview_->PostWebMessageAsJson(toWide(*text).c_str());
                 return 0;
             }
+            case kShowAlert: {
+                std::unique_ptr<Alert> alert(reinterpret_cast<Alert*>(lparam));
+                if (self) self->showNotifyIcon();
+                showAlert(window, *alert);
+                return 0;
+            }
+            case kNotifyIcon:
+                if (!self) return 0;
+                if (LOWORD(lparam) == NIN_BALLOONUSERCLICK || LOWORD(lparam) == WM_LBUTTONUP) {
+                    self->bringToFront();
+                } else if (LOWORD(lparam) == WM_RBUTTONUP) {
+                    HMENU menu = CreatePopupMenu();
+                    AppendMenuW(menu, MF_STRING, kCommandOpen, L"Open WHY?");
+                    AppendMenuW(menu, MF_STRING, kCommandExit, L"Exit WHY?");
+                    POINT point{};
+                    GetCursorPos(&point);
+                    SetForegroundWindow(window);
+                    const UINT chosen = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_NONOTIFY, point.x, point.y, 0, window, nullptr);
+                    DestroyMenu(menu);
+                    if (chosen == kCommandOpen) self->bringToFront();
+                    if (chosen == kCommandExit) {
+                        self->quitting_ = true;
+                        DestroyWindow(window);
+                    }
+                }
+                return 0;
+            case WM_CLOSE:
+                if (self && self->hideInsteadOfClosing()) return 0;
+                DestroyWindow(window);
+                return 0;
             case WM_DESTROY:
+                if (self && self->notifyIcon_) removeNotifyIcon(window);
                 PostQuitMessage(0);
                 return 0;
             default:
@@ -497,6 +714,11 @@ private:
     wil::unique_mutex_nothrow single_;
     std::optional<std::wstring> startupReport_;
     HWND window_ = nullptr;
+    bool mica_ = false;
+    bool notifyIcon_ = false;
+    bool background_ = false;
+    bool quitting_ = false;
+    std::int64_t notifiedUpTo_ = nowUnixMs();
     std::wstring userData_;
     wil::com_ptr<ICoreWebView2Environment> environment_;
     wil::com_ptr<ICoreWebView2Controller> controller_;
@@ -504,24 +726,38 @@ private:
     std::mutex mutex_;
     std::shared_ptr<Backend> backend_;
     std::string report_;
+    SystemMonitor system_;
+    ProcessMonitor processes_;
     std::atomic<bool> running_{true};
 };
 
 }  // namespace
 
-int runWindow(HINSTANCE instance, const std::optional<std::wstring>& reportPath) {
+int runWindow(HINSTANCE instance, const std::optional<std::wstring>& reportPath, bool background) {
     wil::unique_mutex_nothrow single;
     bool alreadyRunning = false;
     if (single.try_create(L"Local\\WHY-Window", 0, MUTEX_ALL_ACCESS, nullptr, &alreadyRunning) && alreadyRunning) {
+        // Started again at sign-in while already running: nothing to show.
+        if (background) return 0;
         if (const HWND existing = FindWindowW(kClassName, nullptr)) {
+            ShowWindow(existing, SW_SHOW);
             ShowWindow(existing, SW_RESTORE);
             SetForegroundWindow(existing);
         }
         return 0;
     }
 
+    // "Always run as administrator": ask Windows for it now, the ordinary way, with its confirmation prompt.
+    // At sign-in WHY? starts without it rather than greeting the person with a prompt.
+    if (!background && !reportPath && !isElevated() && loadSettings().runAsAdmin) {
+        single.reset();
+        if (reinterpret_cast<INT_PTR>(ShellExecuteW(nullptr, L"runas", executablePath().c_str(), nullptr, nullptr, SW_SHOWNORMAL)) > 32) return 0;
+        // Declined: carry on with what can be read without it.
+        single.try_create(L"Local\\WHY-Window");
+    }
+
     const auto coInit = wil::CoInitializeEx(COINIT_APARTMENTTHREADED);
-    AppWindow window(instance, reportPath, std::move(single));
+    AppWindow window(instance, reportPath, std::move(single), background);
     return window.run();
 }
 

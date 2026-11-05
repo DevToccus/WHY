@@ -8,7 +8,7 @@
 
 namespace why {
 
-enum class Area { Hardware, Driver, Software, System };
+enum class Area { Hardware, Driver, Software, System, Security, Development };
 enum class Severity { Notice, Warning, Critical };
 
 // How much a statement can be trusted. Everything WHY? says carries one of these.
@@ -110,6 +110,8 @@ struct Case {
     std::vector<Change> changesBefore;
     std::vector<Advice> advice;
     std::vector<ActivityRecord> activity;
+    std::string output;  // The last lines a failed command printed, when why-run captured them.
+    std::string image;   // The program the case is about, when there is one, so the UI can show its icon.
 };
 
 // A person's statement about a case, kept apart from the facts.

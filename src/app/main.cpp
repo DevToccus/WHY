@@ -11,6 +11,8 @@
 #include <string>
 #include <vector>
 
+#include "app/notify.h"
+#include "app/settings.h"
 #include "app/tray.h"
 #include "app/window.h"
 #include "engine/engine.h"
@@ -110,9 +112,11 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
         if (command == L"collect") return runCollect(args);
         if (command == L"service") return runServiceCommand(args);
         if (command == L"--tray") return why::app::runTray(instance);
+        if (command == L"notify-test") return why::app::runNotifyTest(instance);
+        if (command == L"--background") return why::app::runWindow(instance, std::nullopt, true);
         std::optional<std::wstring> reportPath;
         if (!command.empty() && command[0] != L'-') reportPath = command;
-        return why::app::runWindow(instance, reportPath);
+        return why::app::runWindow(instance, reportPath, false);
     } catch (const std::exception& error) {
         MessageBoxA(nullptr, error.what(), "WHY?", MB_ICONERROR);
         return 1;

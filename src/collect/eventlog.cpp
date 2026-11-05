@@ -24,7 +24,8 @@ std::wstring buildQuery(int days) {
                                                std::to_wstring(static_cast<std::int64_t>(days) * 86400000) + L"]"
                                          : L"";
     for (const auto& query : signalQueries()) {
-        xml += L"<Select Path=\"System\">*[System[Provider[@Name='" + toWide(query.provider) + L"'] and (";
+        if (query.channel == kDevChannel) continue;
+        xml += L"<Select Path=\"" + toWide(query.channel) + L"\">*[System[Provider[@Name='" + toWide(query.provider) + L"'] and (";
         for (std::size_t i = 0; i < query.eventIds.size(); ++i) {
             if (i) xml += L" or ";
             xml += L"EventID=" + std::to_wstring(query.eventIds[i]);
@@ -96,7 +97,7 @@ EventLogHistory readEventHistory(int days) {
     const std::wstring xml = buildQuery(days);
     EventHandle query(EvtQuery(nullptr, nullptr, xml.c_str(), EvtQueryChannelPath | EvtQueryTolerateQueryErrors));
     if (!query) {
-        history.error = "The System log could not be read (error " + std::to_string(GetLastError()) + ").";
+        history.error = "The Windows logs could not be read (error " + std::to_string(GetLastError()) + ").";
         return history;
     }
 
@@ -110,7 +111,7 @@ EventLogHistory readEventHistory(int days) {
         }
     }
     if (const DWORD error = GetLastError(); error != ERROR_NO_MORE_ITEMS) {
-        history.error = "Reading the System log stopped early (error " + std::to_string(error) + ").";
+        history.error = "Reading the Windows logs stopped early (error " + std::to_string(error) + ").";
     }
     return history;
 }

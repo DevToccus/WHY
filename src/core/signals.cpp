@@ -4,6 +4,7 @@
 #include <array>
 #include <cctype>
 #include <charconv>
+#include <cstdlib>
 
 #include "core/text.h"
 
@@ -23,6 +24,13 @@ constexpr std::array kSignals{
     SignalInfo{"filesystem_corruption", Area::Hardware, Severity::Critical, Role::Problem},
     SignalInfo{"driver_load_failed", Area::Driver, Severity::Notice, Role::Problem},
     SignalInfo{"service_crash", Area::Software, Severity::Notice, Role::Problem},
+    SignalInfo{"app_crash", Area::Software, Severity::Warning, Role::Problem},
+    SignalInfo{"app_hang", Area::Software, Severity::Warning, Role::Problem},
+    SignalInfo{"av_detection", Area::Security, Severity::Critical, Role::Problem},
+    SignalInfo{"av_action_failed", Area::Security, Severity::Critical, Role::Problem},
+    SignalInfo{"av_disabled", Area::Security, Severity::Warning, Role::Problem},
+    SignalInfo{"dev_crash", Area::Development, Severity::Warning, Role::Problem},
+    SignalInfo{"dev_failed", Area::Development, Severity::Notice, Role::Problem},
     SignalInfo{"driver_service_installed", Area::Driver, Severity::Notice, Role::Change},
     SignalInfo{"update_installed", Area::System, Severity::Notice, Role::Change},
     SignalInfo{"log_cleared", Area::System, Severity::Notice, Role::Integrity},
@@ -32,6 +40,7 @@ struct Rule {
     const char* provider;
     int eventId;
     const char* signal;
+    const char* channel = "System";
 };
 
 // IDs are only meaningful together with their provider: 153 from "disk" is a retried read,
@@ -72,6 +81,20 @@ constexpr std::array kRules{
     Rule{"Service Control Manager", 7045, "driver_service_installed"},
     Rule{"Microsoft-Windows-WindowsUpdateClient", 19, "update_installed"},
     Rule{"Microsoft-Windows-Eventlog", 104, "log_cleared"},
+    // Programs that crash or stop responding. .NET and WER also log each crash, but this record names the path.
+    Rule{"Application Error", 1000, "app_crash", "Application"},
+    Rule{"Application Hang", 1002, "app_hang", "Application"},
+    // Microsoft Defender: a threat found (1116, or 1015 for suspicious behaviour), what was done about it (1117),
+    // an action that failed (1118, 1119), and real-time protection turned off (5001).
+    Rule{"Microsoft-Windows-Windows Defender", 1116, "av_detection", "Microsoft-Windows-Windows Defender/Operational"},
+    Rule{"Microsoft-Windows-Windows Defender", 1015, "av_detection", "Microsoft-Windows-Windows Defender/Operational"},
+    Rule{"Microsoft-Windows-Windows Defender", 1117, "av_detection", "Microsoft-Windows-Windows Defender/Operational"},
+    Rule{"Microsoft-Windows-Windows Defender", 1118, "av_action_failed", "Microsoft-Windows-Windows Defender/Operational"},
+    Rule{"Microsoft-Windows-Windows Defender", 1119, "av_action_failed", "Microsoft-Windows-Windows Defender/Operational"},
+    Rule{"Microsoft-Windows-Windows Defender", 5001, "av_disabled", "Microsoft-Windows-Windows Defender/Operational"},
+    // WHY?'s own records about development tools. They are not in any Windows log.
+    Rule{kDevProvider, kDevExitEvent, "dev_crash", kDevChannel},
+    Rule{kDevProvider, kDevRunEvent, "dev_crash", kDevChannel},
 };
 
 const std::string& dataOf(const Event& event, const char* key) {
@@ -98,10 +121,11 @@ const std::vector<ProviderQuery>& signalQueries() {
     static const std::vector<ProviderQuery> queries = [] {
         std::vector<ProviderQuery> out;
         for (const auto& rule : kRules) {
-            auto it = std::find_if(out.begin(), out.end(),
-                                   [&](const ProviderQuery& q) { return q.provider == rule.provider; });
+            auto it = std::find_if(out.begin(), out.end(), [&](const ProviderQuery& q) {
+                return q.provider == rule.provider && q.channel == rule.channel;
+            });
             if (it == out.end()) {
-                out.push_back({rule.provider, {}});
+                out.push_back({rule.channel, rule.provider, {}});
                 it = out.end() - 1;
             }
             it->eventIds.push_back(rule.eventId);
@@ -142,6 +166,26 @@ bool classify(Event& event) {
         const auto& image = dataOf(event, "ImagePath");
         if (!endsWithNoCase(trim(image), ".sys")) return false;
         event.subject = dataOf(event, "ServiceName");
+    } else if (signal == "app_crash") {
+        event.subject = trim(dataOf(event, "AppPath"));
+        if (event.subject.empty()) event.subject = trim(dataOf(event, "AppName"));
+    } else if (signal == "app_hang") {
+        // The hang record has no field names. The path is the parameter that looks like one.
+        event.subject = trim(dataOf(event, "param1"));
+        for (const auto& [name, value] : event.data) {
+            if (value.find('\\') != std::string::npos && endsWithNoCase(trim(value), ".exe")) event.subject = trim(value);
+        }
+    } else if (signal == "av_detection" || signal == "av_action_failed") {
+        // Detection and action records share the threat name, so they join into one incident.
+        event.subject = trim(dataOf(event, "Threat Name"));
+    } else if (signal == "dev_crash") {
+        // Long-running processes were serving something; short ones were commands such as a build or a test run.
+        const auto& runtime = dataOf(event, "RuntimeMs");
+        if (!runtime.empty() && std::strtoll(runtime.c_str(), nullptr, 10) < kDevServerMinRuntimeMs) {
+            event.signal = "dev_failed";
+            event.role = signalInfo("dev_failed")->role;
+        }
+        event.subject = dataOf(event, "Label") + "@" + dataOf(event, "Directory");
     } else if (signal == "update_installed") {
         event.subject = dataOf(event, "updateTitle");
         if (isRoutineUpdateTitle(event.subject)) return false;

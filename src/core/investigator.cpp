@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <charconv>
+#include <cstdio>
+#include <cstdlib>
 #include <set>
 
 #include "core/bugcheck.h"
@@ -285,6 +287,176 @@ void describeService(Case& c) {
     c.advice.push_back({"If something depends on this service, update or reinstall the program it belongs to.", "services"});
 }
 
+// The file name of a program, from the path the crash record gives.
+std::string programName(const std::string& subject) {
+    const auto slash = subject.find_last_of("\\/");
+    return slash == std::string::npos ? subject : subject.substr(slash + 1);
+}
+
+void describeApp(Case& c, const Incident& latest) {
+    const std::string program = c.subject.empty() ? "A program" : programName(c.subject);
+    const bool hang = c.signal == "app_hang";
+    c.title = (hang ? "App stopped responding: " : "App crashed: ") + program;
+    c.summary = hang ? "The program stopped responding and was closed." : "The program closed because of an error it could not handle.";
+    c.findings.push_back({Certainty::Verified, program + (hang ? " stopped responding " : " crashed ") +
+                                                   pluralize(c.incidents, "time", "times") + "."});
+    if (!hang && !latest.events.empty()) {
+        const auto& last = latest.events.back();
+        const auto& module = dataOf(last, "ModuleName");
+        const auto code = toLower(dataOf(last, "ExceptionCode"));
+        std::string detail;
+        if (code == "e0434352") detail = "an unhandled .NET exception";
+        else if (code == "c0000005") detail = "an invalid memory access";
+        else if (code == "c0000409") detail = "a stack buffer overrun detected by the program itself";
+        else if (code == "c00000fd") detail = "a stack overflow";
+        else if (!code.empty()) detail = "exception code 0x" + code;
+        if (!detail.empty()) {
+            c.findings.push_back({Certainty::Verified, "The latest crash was " + detail +
+                                                           (module.empty() ? "." : ", reported in " + module + ".")});
+        }
+    }
+    if (c.subject.find('\\') != std::string::npos) {
+        c.findings.push_back({Certainty::Verified, "Program path: " + c.subject});
+        c.image = c.subject;
+    }
+    c.advice.push_back({"Update or reinstall the program. If you develop it, its own logs or a debugger will show the failing code.", ""});
+    c.advice.push_back({"See every crash of this program in Reliability Monitor.", "reliability_monitor"});
+}
+
+// Defender writes paths as "file:_C:\\...; process:_pid:..." and lists several at once.
+std::vector<std::string> threatFiles(const std::string& paths) {
+    std::vector<std::string> files;
+    std::size_t start = 0;
+    while (start < paths.size()) {
+        const auto end = std::min(paths.find(';', start), paths.size());
+        std::string part = trim(paths.substr(start, end - start));
+        if (part.starts_with("file:_")) files.push_back(part.substr(6));
+        start = end + 1;
+    }
+    return files;
+}
+
+void describeDefender(Case& c, const Incident& latest) {
+    if (c.signal == "av_disabled") {
+        c.title = "Microsoft Defender real-time protection was turned off";
+        c.summary = "Files were not scanned as they were opened while protection was off.";
+        c.findings.push_back({Certainty::Verified, "Real-time protection was turned off " + pluralize(c.incidents, "time", "times") + "."});
+        c.advice.push_back({"If you did not turn it off, check Windows Security and scan the PC.", "windows_security"});
+        return;
+    }
+
+    const std::string threat = c.subject.empty() ? "a threat" : c.subject;
+    const bool failed = c.signal == "av_action_failed";
+    c.title = (failed ? "Microsoft Defender could not remove " : "Microsoft Defender detected ") + threat;
+    c.summary = failed ? "Defender found a threat and tried to act on it, but the action did not complete."
+                       : "Defender found something it considers harmful and acted on it.";
+    c.causeSupported = true;
+    c.findings.push_back({Certainty::Verified, "Defender reported " + threat + " " + pluralize(c.incidents, "time", "times") + "."});
+
+    std::string severity, category, action, process;
+    std::vector<std::string> files;
+    for (const auto& event : latest.events) {
+        if (const auto& value = dataOf(event, "Severity Name"); !value.empty()) severity = value;
+        if (const auto& value = dataOf(event, "Category Name"); !value.empty()) category = value;
+        if (const auto& value = dataOf(event, "Action Name"); !value.empty()) action = value;
+        if (const auto& value = dataOf(event, "Process Name"); !value.empty() && value != "Unknown" && process.empty()) process = value;
+        for (auto& file : threatFiles(dataOf(event, "Path"))) {
+            if (std::find(files.begin(), files.end(), file) == files.end()) files.push_back(std::move(file));
+        }
+    }
+    if (!severity.empty() || !category.empty()) {
+        c.findings.push_back({Certainty::Verified, "Defender rates it: " + severity + (category.empty() ? "" : ", " + category) + "."});
+    }
+    for (const auto& file : files) {
+        c.findings.push_back({Certainty::Verified, "File involved: " + file});
+        if (c.image.empty() && endsWithNoCase(file, ".exe")) c.image = file;
+    }
+    if (!process.empty()) c.findings.push_back({Certainty::Verified, "Noticed while this program was running: " + process});
+    if (!action.empty()) c.findings.push_back({Certainty::Verified, "What Defender did: " + action + "."});
+    if (c.subject.starts_with("Behavior:") || c.subject.find("!ml") != std::string::npos) {
+        c.findings.push_back({Certainty::Correlated,
+                              "This name comes from behaviour analysis, not from a known sample. Programs you build yourself, "
+                              "which nobody has signed yet, can trigger it when they start with Windows or ask for administrator rights."});
+    }
+    c.advice.push_back({"Open Windows Security to see the details, restore the file if you trust it, or remove it.", "windows_security"});
+}
+
+// A dev case's subject is "label@folder".
+std::pair<std::string, std::string> devSubject(const std::string& subject) {
+    const auto at = subject.find('@');
+    if (at == std::string::npos) return {subject, ""};
+    return {subject.substr(0, at), subject.substr(at + 1)};
+}
+
+std::string exitCodeMeaning(std::uint32_t code) {
+    switch (code) {
+        case 1: return "a general error, which is how Node, Python and most tools report an uncaught exception";
+        case 3: return "an abort";
+        case 7: return "an error inside Node's own exception handler";
+        case 9: return "an invalid argument to Node";
+        case 13: return "an unfinished top-level await in Node";
+        case 134: return "an abort, often JavaScript running out of memory";
+        case 0xC0000005: return "an invalid memory access in native code";
+        case 0xC0000409: return "a fail-fast stop, which Node and V8 use for fatal errors such as running out of memory";
+        case 0xC00000FD: return "a stack overflow";
+        case 0xE0434352: return "an unhandled .NET exception";
+        case 0xC0000142: return "a failure to start, often a missing or broken DLL";
+        case 0xFFFFFFFF: return "the process was ended from outside, for example by End task";
+        default: return "";
+    }
+}
+
+std::string describeDuration(std::int64_t ms) {
+    const auto minutes = ms / kMinute;
+    if (minutes < 1) return std::to_string(ms / 1000) + " seconds";
+    if (minutes < 120) return pluralize(static_cast<int>(minutes), "minute", "minutes");
+    return pluralize(static_cast<int>(minutes / 60), "hour", "hours");
+}
+
+void describeDev(Case& c, const Incident& latest) {
+    const auto [label, folder] = devSubject(c.subject);
+    const bool server = c.signal == "dev_crash";
+    const std::string folderName = folder.substr(folder.find_last_of("\\/") + 1);
+    c.title = (server ? "Dev server stopped with an error: " : "Command failed: ") + label + (folderName.empty() ? "" : " (" + folderName + ")");
+
+    const Event& last = latest.events.back();
+    const auto& rawCode = dataOf(last, "ExitCode");
+    const auto code = static_cast<std::uint32_t>(std::strtoull(rawCode.c_str(), nullptr, 10));
+    char hex[16]{};
+    std::snprintf(hex, sizeof(hex), "0x%08X", code);
+    const std::string codeText = code > 255 ? std::string(hex) : std::to_string(code);
+    c.image = dataOf(last, "Image");
+    const auto& runtime = dataOf(last, "RuntimeMs");
+    const std::int64_t ranFor = std::strtoll(runtime.c_str(), nullptr, 10);
+
+    c.summary = server ? "It had been running for " + describeDuration(ranFor) + " and exited with code " + codeText + "."
+                       : "It exited with code " + codeText + " after " + describeDuration(ranFor) + ".";
+    c.findings.push_back({Certainty::Verified, label + (server ? " stopped with an error " : " failed ") + pluralize(c.incidents, "time", "times") + "."});
+    const std::string meaning = exitCodeMeaning(code);
+    c.findings.push_back({Certainty::Verified, "Exit code " + codeText + (meaning.empty() ? "." : ": " + meaning + ".")});
+    if (const auto& command = dataOf(last, "CommandLine"); !command.empty()) c.findings.push_back({Certainty::Verified, "Command: " + command});
+    if (!folder.empty()) c.findings.push_back({Certainty::Verified, "Folder: " + folder});
+
+    // why-run keeps the end of what the command printed. That text is usually the actual error and stack.
+    for (auto it = latest.events.rbegin(); it != latest.events.rend(); ++it) {
+        if (const auto& output = dataOf(*it, "Output"); !output.empty()) {
+            c.output = output;
+            break;
+        }
+    }
+    if (!c.output.empty()) {
+        c.causeSupported = true;
+        c.findings.push_back({Certainty::Verified, "The last lines it printed are kept in the terminal output. The error and its stack are usually at the end."});
+        c.advice.push_back({"Read the terminal output from the bottom up: the first line of the stack that points into your own code is where to start.", ""});
+    } else {
+        c.findings.push_back({Certainty::Correlated, "WHY? saw it exit but cannot read a terminal it did not start, so the error text is not here."});
+        c.advice.push_back({"Start it through why-run, for example \"why-run npm run dev\", and WHY? keeps the error it prints next time.", ""});
+    }
+    if (code == 134 || code == 0xC0000409) {
+        c.advice.push_back({"If the output mentions heap out of memory, raise Node's limit with NODE_OPTIONS=--max-old-space-size=4096 or look for a leak.", ""});
+    }
+}
+
 // ---- What changed before the case began ----
 
 bool sameModule(const Change& change, const std::string& stem) {
@@ -497,13 +669,19 @@ std::vector<Case> investigate(const InvestigationInput& input) {
             describeDriverLoad(c);
         } else if (signal == "service_crash") {
             describeService(c);
+        } else if (signal == "app_crash" || signal == "app_hang") {
+            describeApp(c, latest);
+        } else if (signal.starts_with("av_")) {
+            describeDefender(c, latest);
+        } else if (signal.starts_with("dev_")) {
+            describeDev(c, latest);
         } else {
             describeDisk(c, c.signal);
         }
 
         // Which module the case concerns, when the evidence names one.
         std::string stem = moduleStem(c.subject);
-        if (signal == "service_crash" || signal.starts_with("disk") || signal == "storage_reset") stem.clear();
+        if (signal == "service_crash" || signal.starts_with("disk") || signal == "storage_reset" || signal.starts_with("app_") || signal.starts_with("av_") || signal.starts_with("dev_")) stem.clear();
         if (const auto* driver = findDriver(input.drivers, stem)) {
             if (!driver->version.empty()) {
                 c.findings.push_back({Certainty::Verified, "Installed driver: " +

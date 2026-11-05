@@ -87,3 +87,35 @@ TEST_CASE("driver update titles are told apart from other updates") {
     CHECK_FALSE(isDriverUpdateTitle("2026-10 Cumulative Update for Windows 11 (KB5040000)"));
     CHECK_FALSE(isDriverUpdateTitle("Security Intelligence Update - KB2267602 - Version 1.4"));
 }
+
+TEST_CASE("Defender detections are named by the threat") {
+    auto found = make("Microsoft-Windows-Windows Defender", 1116);
+    found.data["Threat Name"] = "Behavior:Win32/Persistence.A!ml";
+    REQUIRE(classify(found));
+    CHECK(found.signal == "av_detection");
+    CHECK(found.subject == "Behavior:Win32/Persistence.A!ml");
+
+    auto off = make("Microsoft-Windows-Windows Defender", 5001);
+    REQUIRE(classify(off));
+    CHECK(off.signal == "av_disabled");
+}
+
+TEST_CASE("program crashes and hangs are named by their path") {
+    auto crash = make("Application Error", 1000);
+    crash.data["AppName"] = "Treasury.exe";
+    crash.data["AppPath"] = "C:\\dev\\Treasury\\Treasury.exe";
+    REQUIRE(classify(crash));
+    CHECK(crash.signal == "app_crash");
+    CHECK(crash.subject == "C:\\dev\\Treasury\\Treasury.exe");
+
+    auto hang = make("Application Hang", 1002);
+    hang.data["param1"] = "editor.exe";
+    hang.data["param6"] = "C:\\Tools\\editor.exe";
+    REQUIRE(classify(hang));
+    CHECK(hang.signal == "app_hang");
+    CHECK(hang.subject == "C:\\Tools\\editor.exe");
+
+    // The same ID from another provider is someone else's message.
+    auto other = make("CodexSandboxService.OpenAI.Codex", 1000);
+    CHECK_FALSE(classify(other));
+}

@@ -1,79 +1,108 @@
-import * as bridge from "../bridge";
-import { alertLabels, areaLabels, formatDay, formatMoment, needsLook, plural, relativeDay } from "../format";
-import type { Area, Case, State } from "../types";
+import { CaseRow } from "../components/CaseRow";
+import { useState } from "react";
+import { AreaDonut, periods, ProblemsTrend, type Period } from "../components/Charts";
+import { Icon } from "../components/Icon";
+import { formatDay, needsLook, plural } from "../format";
+import type { State } from "../types";
 
 interface Props {
   state: State;
   onOpenCase: (key: string) => void;
   onShowCases: () => void;
-  onAction: (action: () => Promise<bridge.ActionResult>, success?: string) => void;
+  onShowSettings: () => void;
 }
 
-const areas: Area[] = ["hardware", "driver", "software", "system"];
+// Home shows the few cases that matter most; the rest wait in Cases.
+const ROWS_SHOWN = 4;
 
-function verdict(attention: number, scanning: boolean): string {
+function verdict(attention: number, serious: number, scanning: boolean): string {
+  if (serious > 0 && serious === attention) return `${plural(serious, "serious problem needs", "serious problems need")} a look.`;
+  if (serious > 0) return `${plural(attention, "problem needs", "problems need")} a look, ${serious} of them serious.`;
   if (attention > 0) return `${plural(attention, "problem needs", "problems need")} a look.`;
   if (scanning) return "Still reading what Windows has recorded.";
   return "Nothing needs your attention.";
 }
 
-function areaLine(cases: Case[]): { text: string; tone: string } {
-  const attention = cases.filter(needsLook);
-  if (attention.some((item) => item.severity === "critical")) return { text: plural(attention.length, "serious problem"), tone: "critical" };
-  if (attention.length > 0) return { text: plural(attention.length, "problem"), tone: "warning" };
-  const open = cases.filter((item) => item.status === "open" || item.status === "watching");
-  if (open.length > 0) return { text: `${plural(open.length, "minor complaint")}`, tone: "quiet" };
-  return { text: "Nothing on record", tone: "ok" };
-}
+// Per-viewer conveniences: the chosen chart span and a dismissed tip. Storage may be refused; the defaults then apply.
+const remembered = (key: string) => {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+};
+const remember = (key: string, value: string) => {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    // Nothing to keep in a private window.
+  }
+};
 
-export function StatusScreen({ state, onOpenCase, onShowCases, onAction }: Props) {
+const TIP_COMMAND = "why-run npm run dev";
+
+export function StatusScreen({ state, onOpenCase, onShowCases, onShowSettings }: Props) {
   const attention = state.cases.filter(needsLook);
-  const limited = state.coverage.filter((source) => source.status !== "ok");
-  const isReport = state.mode === "report";
+  const serious = attention.filter((item) => item.severity === "critical").length;
+  const available = state.coverage.filter((source) => source.status === "ok").length;
+  const tone = serious > 0 ? "critical" : attention.length > 0 ? "warning" : "ok";
+  const [period, setPeriod] = useState<Period>(() => {
+    const saved = remembered("why-period");
+    return periods.some((item) => item.id === saved) ? (saved as Period) : "month";
+  });
+  const [tipHidden, setTipHidden] = useState(() => remembered("why-hide-dev-tip") === "1");
+  const [copied, setCopied] = useState(false);
+
+  const choosePeriod = (next: Period) => {
+    setPeriod(next);
+    remember("why-period", next);
+  };
 
   return (
     <>
-      <header className="verdict">
-        <h1 className={attention.some((item) => item.severity === "critical") ? "verdict-critical" : undefined}>{verdict(attention.length, state.scanning)}</h1>
-        <p>
-          {state.machine.os}
-          {state.historyStartMs > 0 && `. The logs reach back to ${formatDay(state.historyStartMs)}.`}
-          {limited.length > 0 && ` ${plural(limited.length, "source is", "sources are")} limited, so some problems may not show.`}
-        </p>
-      </header>
+      <h1>Home</h1>
 
-      <section className="area-strip" aria-label="Health by area">
-        {areas.map((area) => {
-          const line = areaLine(state.cases.filter((item) => item.area === area));
-          return (
-            <div className="area" key={area}>
-              <h2>{areaLabels[area]}</h2>
-              <p className={`tone-${line.tone}`}>{line.text}</p>
-            </div>
-          );
-        })}
-      </section>
+      <header className={`hero card hero-${tone}`}>
+        <span className={`hero-badge tone-${tone}`} aria-hidden="true">
+          <Icon name={tone === "critical" ? "critical" : tone === "warning" ? "warning" : "ok"} />
+        </span>
+        <div className="hero-text">
+          <h2 className="hero-title">{verdict(attention.length, serious, state.scanning)}</h2>
+          <p className="muted">
+            {state.machine.os}
+            {state.historyStartMs > 0 && `. Logs since ${formatDay(state.historyStartMs)}. `}
+            <button className="link" onClick={onShowSettings}>
+              {available} of {state.coverage.length} sources readable
+            </button>
+          </p>
+        </div>
+        <button className="hero-action" onClick={onShowCases}>
+          <span>
+            <strong>{state.cases.length}</strong> {state.cases.length === 1 ? "case" : "cases"}
+          </span>
+          <span className="hero-action-label">
+            Open Cases <Icon name="chevron" />
+          </span>
+        </button>
+      </header>
 
       {attention.length > 0 && (
         <section>
           <h2 className="section-title">Needs a look</h2>
           <ul className="rows">
-            {attention.map((item) => (
+            {attention.slice(0, ROWS_SHOWN).map((item) => (
               <li key={item.key}>
-                <button className="row" onClick={() => onOpenCase(item.key)}>
-                  <span className={`severity-bar severity-${item.severity}`} aria-hidden="true" />
-                  <span className="row-main">
-                    <strong>{item.title}</strong>
-                    <span className="muted">{item.summary}</span>
-                  </span>
-                  <span className="row-side">
-                    <span>{alertLabels[item.alert]}</span>
-                    <span className="muted">{relativeDay(item.lastMs, state.generatedMs)}</span>
-                  </span>
-                </button>
+                <CaseRow item={item} now={state.generatedMs} onOpen={onOpenCase} />
               </li>
             ))}
           </ul>
+          {attention.length > ROWS_SHOWN && (
+            <p>
+              <button className="link" onClick={onShowCases}>
+                See all {attention.length} in Cases
+              </button>
+            </p>
+          )}
         </section>
       )}
 
@@ -85,52 +114,58 @@ export function StatusScreen({ state, onOpenCase, onShowCases, onAction }: Props
         </p>
       )}
 
-      <section>
-        <h2 className="section-title">What WHY? could read</h2>
-        <table className="coverage">
-          <tbody>
-            {state.coverage.map((source) => (
-              <tr key={source.id}>
-                <th scope="row">{source.label}</th>
-                <td className={source.status === "ok" ? "tone-ok" : "tone-warning"}>{source.status === "ok" ? "Available" : "Limited"}</td>
-                <td className="muted">
-                  {source.detail}
-                  {source.oldestMs > 0 && ` Reaches back to ${formatMoment(source.oldestMs)}.`}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        {!isReport && !state.elevated && (
-          <p className="action-line">
-            <button onClick={() => onAction(bridge.restartElevated)}>Restart as administrator</button>
-            <span className="muted">Reads crash dumps and the file change journal, and starts the activity recorder.</span>
-          </p>
-        )}
-      </section>
-
-      {!isReport && (
-        <section>
-          <h2 className="section-title">{state.mode === "live" ? "Live monitoring is on" : "Monitoring ends when you close WHY?"}</h2>
-          {state.mode === "live" ? (
-            <p className="action-line">
-              <button className="quiet" onClick={() => onAction(bridge.uninstallLive, "Live monitoring and its history were removed.")}>
-                Remove Live monitoring
-              </button>
-              <span className="muted">Runs in the background and notifies you when something goes wrong. It only observes.</span>
-            </p>
-          ) : (
-            <p className="action-line">
-              <button className="quiet" onClick={() => onAction(bridge.installLive, "Live monitoring is installed and running.")}>
-                Install Live monitoring
-              </button>
-              <span className="muted">
-                Nothing is saved on this PC right now. Installing adds a background service that keeps history and notifies you. Needs administrator rights.
-              </span>
-            </p>
-          )}
+      {!tipHidden && !state.cases.some((item) => item.area === "development") && (
+        <section className="banner dev-tip" aria-label="Tip">
+          <Icon name="info" className="banner-icon" />
+          <span className="dev-tip-text">
+            <strong>Building something?</strong> WHY? notices when a dev server or command stops with an error. Start it through why-run to also keep the
+            error it prints.
+          </span>
+          <code className="dev-tip-command">{TIP_COMMAND}</code>
+          <button
+            className="quiet"
+            onClick={() => {
+              navigator.clipboard?.writeText(TIP_COMMAND);
+              setCopied(true);
+            }}
+          >
+            {copied ? "Copied" : "Copy"}
+          </button>
+          <button
+            className="subtle icon-button"
+            aria-label="Hide this tip"
+            onClick={() => {
+              setTipHidden(true);
+              remember("why-hide-dev-tip", "1");
+            }}
+          >
+            <Icon name="dismiss" />
+          </button>
         </section>
       )}
+
+      <section>
+        <div className="overview-head">
+          <h2 className="section-title">Overview</h2>
+          <div className="segmented" role="radiogroup" aria-label="Period">
+            {periods.map((item) => (
+              <button key={item.id} role="radio" aria-checked={period === item.id} onClick={() => choosePeriod(item.id)}>
+                {item.label}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="chart-grid">
+          <div className="card chart-card">
+            <h2 className="card-title">Problems over time</h2>
+            <ProblemsTrend state={state} period={period} />
+          </div>
+          <div className="card chart-card">
+            <h2 className="card-title">By area</h2>
+            <AreaDonut state={state} period={period} />
+          </div>
+        </div>
+      </section>
     </>
   );
 }

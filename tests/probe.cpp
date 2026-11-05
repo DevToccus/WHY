@@ -7,9 +7,14 @@
 #include <chrono>
 #include <cstdio>
 #include <filesystem>
+#include <fstream>
+#include <mutex>
 #include <nlohmann/json.hpp>
 #include <thread>
+#include <wil/com.h>
 
+#include "app/monitor.h"
+#include "collect/devwatch.h"
 #include "collect/drivers.h"
 #include "collect/dumps.h"
 #include "collect/etw.h"
@@ -179,6 +184,108 @@ int main(int argc, char** argv) {
         printf("    CPU while watching: %.0f ms in %d s, %.3f%% of one core, %.4f%% of %lu logical processors\n", used, watchSeconds,
                used / (watchSeconds * 10.0), used / (watchSeconds * 10.0 * system.dwNumberOfProcessors), system.dwNumberOfProcessors);
         engine.stop();
+    }
+
+    puts("Performance monitor");
+    {
+        const auto com = wil::CoInitializeEx(COINIT_APARTMENTTHREADED);
+        why::app::SystemMonitor system;
+        why::app::ProcessMonitor processes;
+        processes.sample();
+        system.sample();
+        Sleep(1000);
+        const auto stats = system.sample();
+        check(stats["cpu"]["cores"].size() > 0, "per-core CPU read");
+        check(stats["memory"]["total"].get<std::uint64_t>() > 0, "memory read");
+        printf("    cpu %.1f%% at %.0f MHz, %zu cores, %s\n", stats["cpu"]["usage"].get<double>(), stats["cpu"]["currentMhz"].get<double>(),
+               stats["cpu"]["cores"].size(), stats["cpu"]["name"].get<std::string>().c_str());
+        printf("    gpu %.1f%%, disks %zu, volumes %zu, adapters %zu, processes %d\n", stats["gpu"]["usage"].get<double>(), stats["disks"].size(),
+               stats["volumes"].size(), stats["network"].size(), stats["processes"].get<int>());
+        const auto list = processes.sample();
+        int apps = 0, withIcons = 0;
+        std::vector<std::wstring> paths;
+        for (const auto& item : list) {
+            if (item["group"] == "app") ++apps;
+            if (!item["path"].get<std::string>().empty() && paths.size() < 5) paths.push_back(why::toWide(item["path"].get<std::string>()));
+        }
+        withIcons = static_cast<int>(why::app::programIcons(paths).size());
+        check(!list.empty(), "processes listed");
+        printf("    %zu processes, %d apps with windows, %d of %zu icons\n", list.size(), apps, withIcons, paths.size());
+    }
+
+    puts("Development tools");
+    {
+        // A Node script that throws, started without why-run: the watcher must see it exit with an error,
+        // and must also pick up any why-run records already in this person's folder.
+        std::mutex mutex;
+        std::vector<why::Event> seen;
+        why::DevWatcher devWatcher([&](why::Event event) {
+            const std::lock_guard lock(mutex);
+            seen.push_back(std::move(event));
+        });
+        const auto script = std::filesystem::temp_directory_path() / "why-probe-crash.js";
+        std::ofstream(script) << "setTimeout(() => { throw new Error('probe'); }, 2500);";
+        std::wstring command = L"node \"" + script.wstring() + L"\"";
+        STARTUPINFOW startup{sizeof(startup)};
+        PROCESS_INFORMATION process{};
+        const bool nodeStarted = CreateProcessW(nullptr, command.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &startup, &process);
+        check(nodeStarted, "node started");
+        if (nodeStarted) {
+            WaitForSingleObject(process.hProcess, 10'000);
+            CloseHandle(process.hProcess);
+            CloseHandle(process.hThread);
+        }
+        Sleep(2500);
+        std::filesystem::remove(script);
+        const std::lock_guard lock(mutex);
+        const auto exit = std::find_if(seen.begin(), seen.end(), [](const why::Event& e) { return e.eventId == 1; });
+        check(exit != seen.end(), "error exit of a dev process seen");
+        if (exit != seen.end()) {
+            printf("    %s: %s, exit %s, label '%s'\n", exit->signal.c_str(), exit->data.at("CommandLine").c_str(), exit->data.at("ExitCode").c_str(),
+                   exit->data.at("Label").c_str());
+        }
+        printf("    %zu why-run records\n", static_cast<std::size_t>(std::count_if(seen.begin(), seen.end(), [](const why::Event& e) { return e.eventId == 2; })));
+    }
+
+    puts("Fixes kept across restarts");
+    {
+        // The window's engine keeps history in memory; a fix marked in one session must still hold in the next.
+        const auto path = std::filesystem::temp_directory_path() / "why-probe-fixes.jsonl";
+        std::filesystem::remove(path);
+        why::EngineOptions options;
+        options.overridesPath = path.wstring();
+        const auto firstCase = [](const why::Engine& engine) -> nlohmann::json {
+            for (int i = 0; i < 600 && engine.revision() < 2; ++i) Sleep(100);
+            const auto state = nlohmann::json::parse(*engine.state());
+            return state["cases"].empty() ? nlohmann::json() : state["cases"][0];
+        };
+        std::string key;
+        {
+            why::Engine engine(options);
+            engine.start();
+            const auto item = firstCase(engine);
+            if (item.is_object()) {
+                key = item["key"].get<std::string>();
+                check(engine.applyCaseAction(key, "tried_fix"), "fix accepted");
+            }
+            engine.stop();
+        }
+        if (key.empty()) {
+            puts("    no case on this PC to mark, skipped");
+        } else {
+            why::Engine engine(options);
+            engine.start();
+            for (int i = 0; i < 600 && engine.revision() < 2; ++i) Sleep(100);
+            const auto state = nlohmann::json::parse(*engine.state());
+            std::string status;
+            for (const auto& item : state["cases"]) {
+                if (item["key"] == key) status = item["status"].get<std::string>();
+            }
+            check(status == "watching", "fix still marked after a restart");
+            printf("    %s is %s\n", key.c_str(), status.c_str());
+            engine.stop();
+        }
+        std::filesystem::remove(path);
     }
 
     puts(g_failed ? "SOME CHECKS FAILED" : "ALL CHECKS PASSED");

@@ -1,4 +1,4 @@
-import type { Area, Case, CaseStatus, Certainty, Change } from "./types";
+import type { Area, Case, CaseStatus, Certainty, Change, Severity } from "./types";
 
 const dayFormat = new Intl.DateTimeFormat(undefined, { day: "numeric", month: "short", year: "numeric" });
 const timeFormat = new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" });
@@ -20,6 +20,8 @@ export const areaLabels: Record<Area, string> = {
   driver: "Drivers",
   software: "Software",
   system: "Windows",
+  security: "Security",
+  development: "Development",
 };
 
 export const certaintyLabels: Record<Certainty, string> = {
@@ -31,7 +33,7 @@ export const certaintyLabels: Record<Certainty, string> = {
 export const statusLabels: Record<CaseStatus, string> = {
   open: "Open",
   quiet: "No recent occurrences",
-  watching: "Watching after your fix",
+  watching: "Marked as fixed, watching",
   recurred: "Came back after your fix",
   resolved: "Has not come back",
 };
@@ -56,6 +58,13 @@ export const signalLabels: Record<string, string> = {
   filesystem_corruption: "File system corruption",
   driver_load_failed: "Driver failed to load",
   service_crash: "Service stopped unexpectedly",
+  app_crash: "App crashed",
+  app_hang: "App stopped responding",
+  av_detection: "Microsoft Defender detected a threat",
+  av_action_failed: "Microsoft Defender could not remove a threat",
+  av_disabled: "Real-time protection turned off",
+  dev_crash: "Dev server stopped with an error",
+  dev_failed: "Command failed",
   driver_service_installed: "Driver installed",
   update_installed: "Windows Update installed something",
   log_cleared: "System log cleared",
@@ -85,3 +94,33 @@ export function changeVersion(change: Change): string {
 }
 
 export const needsLook = (item: Case) => item.alert !== "";
+
+// Marked as fixed by the person, and not back since. Still listed, never tinted.
+export const isFixed = (item: Case) => item.status === "watching" || item.status === "resolved";
+
+// Whether a timeline record is something that went wrong, something that changed, or evidence about the logs themselves.
+export const roleOf = (signal: string) =>
+  signal === "driver_service_installed" || signal === "update_installed" ? "change" : signal === "log_cleared" ? "evidence" : "problem";
+
+// Mirrors the signal table in src/core/signals.cpp.
+export const signalSeverity: Record<string, Severity> = {
+  bsod: "critical",
+  unexpected_restart: "warning",
+  gpu_reset: "warning",
+  whea_fatal: "critical",
+  whea_corrected: "warning",
+  disk_failure_predicted: "critical",
+  disk_error: "critical",
+  disk_retry: "warning",
+  storage_reset: "warning",
+  filesystem_corruption: "critical",
+  driver_load_failed: "notice",
+  service_crash: "notice",
+  app_crash: "warning",
+  app_hang: "warning",
+  av_detection: "critical",
+  av_action_failed: "critical",
+  av_disabled: "warning",
+  dev_crash: "warning",
+  dev_failed: "notice",
+};

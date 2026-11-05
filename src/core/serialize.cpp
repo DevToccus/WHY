@@ -10,6 +10,8 @@ const char* toString(Area area) {
         case Area::Driver: return "driver";
         case Area::Software: return "software";
         case Area::System: return "system";
+        case Area::Security: return "security";
+        case Area::Development: return "development";
     }
     return "system";
 }
@@ -128,7 +130,9 @@ void to_json(json& j, const Case& v) {
              {"findings", findings},
              {"changesBefore", v.changesBefore},
              {"advice", advice},
-             {"activity", v.activity}};
+             {"activity", v.activity},
+             {"output", v.output},
+             {"image", v.image}};
 }
 
 }  // namespace why
