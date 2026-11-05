@@ -8,6 +8,7 @@
 
 namespace why::app {
 
-int runWindow(HINSTANCE instance, const std::optional<std::wstring>& reportPath);
+// `background` starts hidden, with only the notification area icon, as when Windows starts WHY? at sign-in.
+int runWindow(HINSTANCE instance, const std::optional<std::wstring>& reportPath, bool background);
 
 }  // namespace why::app

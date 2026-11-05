@@ -36,6 +36,7 @@ endif()
 # Platform-independent logic: parsing, rules, investigation, storage. Fully unit tested.
 add_library(why_core STATIC
     src/core/bugcheck.cpp
+    src/core/devtools.cpp
     src/core/dump_header.cpp
     src/core/event_xml.cpp
     src/core/investigator.cpp
@@ -49,6 +50,7 @@ target_link_libraries(why_core PUBLIC nlohmann_json::nlohmann_json unofficial::s
 
 # Windows data sources and the engine that runs them.
 add_library(why_engine STATIC
+    src/collect/devwatch.cpp
     src/collect/drivers.cpp
     src/collect/dumps.cpp
     src/collect/etw.cpp
@@ -59,7 +61,7 @@ add_library(why_engine STATIC
     src/engine/service.cpp
     src/engine/winutil.cpp)
 target_link_libraries(why_engine PUBLIC why_core WIL::WIL
-    wevtapi setupapi tdh advapi32 version)
+    wevtapi setupapi tdh advapi32 version shell32 ole32)
 
 # The UI is one self-contained HTML file embedded in the executable.
 set(WHY_UI_HTML "${CMAKE_SOURCE_DIR}/ui/dist/index.html")
@@ -77,6 +79,9 @@ set(WHY_SOURCE_DIR "${CMAKE_SOURCE_DIR}")
 configure_file(src/app/resources.rc.in "${CMAKE_BINARY_DIR}/resources.rc" @ONLY)
 add_executable(why WIN32
     src/app/main.cpp
+    src/app/monitor.cpp
+    src/app/notify.cpp
+    src/app/settings.cpp
     src/app/tray.cpp
     src/app/window.cpp
     "${CMAKE_BINARY_DIR}/resources.rc")
@@ -87,7 +92,12 @@ target_link_libraries(why PRIVATE why_engine "${WEBVIEW2_LOADER_LIB}"
     shell32 ole32 comdlg32 user32 gdi32 shlwapi)
 target_link_options(why PRIVATE /MANIFEST:NO)
 
+# why-run: a console program that runs a dev command and keeps its error output when it fails.
+add_executable(why-run src/run/main.cpp)
+target_link_libraries(why-run PRIVATE why_engine)
+
 add_executable(why_tests
+    tests/test_devtools.cpp
     tests/test_dump_header.cpp
     tests/test_event_xml.cpp
     tests/test_fuzz.cpp
@@ -98,8 +108,8 @@ add_executable(why_tests
 target_link_libraries(why_tests PRIVATE why_core Catch2::Catch2WithMain)
 
 # Exercises the Windows sources against the real machine, without the UI.
-add_executable(why_probe tests/probe.cpp)
-target_link_libraries(why_probe PRIVATE why_engine dbghelp)
+add_executable(why_probe tests/probe.cpp src/app/monitor.cpp)
+target_link_libraries(why_probe PRIVATE why_engine dbghelp shell32 ole32 shlwapi)
 
 enable_testing()
 add_test(NAME why_tests COMMAND why_tests)

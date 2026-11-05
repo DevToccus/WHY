@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "typecheck": "tsc --noEmit",
-    "build": "tsc --noEmit && vite build"
+    "build": "tsc --noEmit && vite build",
+    "sample-report": "node scripts/sample-report.ts ../build/sample.whyreport.json"
   },
   "dependencies": {
     "react": "19.3.1",

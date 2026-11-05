@@ -10,6 +10,27 @@ Every statement carries one of three levels:
 - **Probable:** direct evidence supports it.
 - **Only correlated:** it happened around the same time, which proves nothing.
 
+## Development tools
+
+WHY? also watches what you build. Node, Bun, Deno, Python, .NET, Java, Go, Cargo, Ruby and PHP processes that exit with an error become cases: a dev server that stops after running a while, or a command such as a build or a test run that fails. Ctrl+C is not counted.
+
+WHY? cannot read a terminal it did not start, so to keep the error a command prints, start it through `why-run`:
+
+```powershell
+why-run npm run dev
+why-run python -m uvicorn main:app --reload
+```
+
+The command runs as usual, with its colours and shortcuts. If it fails, the end of its error output is kept in `%LOCALAPPDATA%\WHY\runs` and shown in the case, whether or not WHY? was open. Put `why-run.exe` somewhere on your PATH to use it from any folder.
+
+## Setup and Focus
+
+The first time it opens, WHY? asks how it should run: always as administrator, at sign-in, and whether closing the window keeps it watching from the notification area. Settings changes them later.
+
+**Focus** narrows WHY? to one program, or to every program in a folder you develop in. It then shows and notifies only that program's crashes and hangs, not Windows itself.
+
+`why notify-test` shows an example error and warning notification.
+
 ## Modes
 
 | Mode | How to run it | What it does |
@@ -25,11 +46,11 @@ Because `why.exe` is a Windows-subsystem program, a command prompt does not wait
 
 ## What the first version covers
 
-- **Sources:** System log, crash dumps (read locally with the debug engine that ships with Windows, never downloading symbols), driver inventory, NTFS change journal for driver files, and an ETW recorder of process starts, stops and driver loads.
-- **Cases:** blue screens, restarts without shutdown, graphics driver resets, WHEA hardware errors, disk and storage errors, file system corruption, drivers that fail to load, services that stop unexpectedly.
+- **Sources:** System and Application logs, crash dumps (read locally with the debug engine that ships with Windows, never downloading symbols), driver inventory, NTFS change journal for driver files, and an ETW recorder of process starts, stops and driver loads.
+- **Cases:** blue screens, restarts without shutdown, graphics driver resets, WHEA hardware errors, disk and storage errors, file system corruption, drivers that fail to load, services that stop unexpectedly, programs that crash or stop responding, Microsoft Defender detections and real-time protection turned off.
 - **What Changed:** driver snapshots (Live), Windows Update, driver service installs, driver store dates and the change journal.
 
-Not covered yet: application crashes, boot time, network, performance, disk health readings, CPU temperature. See the design document for the roadmap.
+Not covered yet: boot time, network, performance, disk health readings, CPU temperature. See the design document for the roadmap.
 
 ## Building
 
@@ -56,7 +77,8 @@ To work on the interface alone, `npm --prefix ui run dev` serves it with invente
 src/core     Logic with no Windows dependency: event parsing, the signal table, the investigator, storage
 src/collect  Windows data sources
 src/engine   The engine that runs them, the local pipe and the service
-src/app      Entry point, WebView2 window, tray notifier
+src/app      Entry point, WebView2 window, tray notifier, performance monitor
+src/run      why-run, the console wrapper for dev commands
 ui           React interface, built into one HTML file embedded in why.exe
 tests        Unit and fuzz tests, and the probe
 ```

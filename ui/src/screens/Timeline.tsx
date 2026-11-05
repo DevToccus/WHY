@@ -1,10 +1,10 @@
 import { useMemo, useState } from "react";
-import { formatDay, formatTime, signalLabels } from "../format";
+import { copyText, useContextMenu } from "../components/ContextMenu";
+import { formatDay, formatTime, roleOf, signalLabels } from "../format";
 import type { State, WhyEvent } from "../types";
 
-const roleOf = (signal: string) => (signal === "driver_service_installed" || signal === "update_installed" ? "change" : signal === "log_cleared" ? "evidence" : "problem");
-
 export function TimelineScreen({ state }: { state: State }) {
+  const openMenu = useContextMenu();
   const [query, setQuery] = useState("");
   const [kind, setKind] = useState<"all" | "problem" | "change">("all");
 
@@ -41,7 +41,20 @@ export function TimelineScreen({ state }: { state: State }) {
           <h2 className="section-title">{day}</h2>
           <ul className="plain-rows">
             {events.map((event, index) => (
-              <li key={`${event.timeMs}-${index}`}>
+              <li
+                key={`${event.timeMs}-${index}`}
+                onContextMenu={(menuEvent) =>
+                  openMenu(menuEvent, [
+                    {
+                      label: "Copy line",
+                      icon: "copy",
+                      onSelect: () => copyText(`${day} ${formatTime(event.timeMs)} ${signalLabels[event.signal] ?? event.signal}${event.subject ? `: ${event.subject}` : ""}`),
+                    },
+                    ...(event.message ? [{ label: "Copy message", icon: "copy" as const, onSelect: () => copyText(event.message) }] : []),
+                    { label: "Copy source and event ID", icon: "copy", onSelect: () => copyText(`${event.provider} ${event.eventId}`) },
+                  ])
+                }
+              >
                 <time className="muted">{formatTime(event.timeMs)}</time>
                 <span className="plain-main">
                   <span>

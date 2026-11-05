@@ -1,11 +1,327 @@
 // Development only: lets the interface run in a browser without the C++ host. Never bundled in why.exe.
-import type { State } from "../types";
+import type { Case, State } from "../types";
 
 const now = Date.now();
 const day = 86_400_000;
 
+type Sample = Pick<Case, "signal" | "area" | "severity" | "title" | "summary" | "subject" | "alert" | "findings" | "advice"> & {
+  status?: Case["status"];
+  provider: string;
+  eventId: number;
+  message: string;
+  daysAgo: number[]; // One record per entry, oldest first.
+};
+
+// A case as the engine would build it from a few records, to cover every kind of problem WHY? recognises.
+function sampleCase(item: Sample): Case {
+  const chain = item.daysAgo.map((d) => ({
+    timeMs: now - d * day,
+    provider: item.provider,
+    eventId: item.eventId,
+    signal: item.signal,
+    subject: item.subject,
+    message: item.message,
+    channel: "System",
+  }));
+  return {
+    key: item.subject ? `${item.signal}:${item.subject}` : item.signal,
+    signal: item.signal,
+    area: item.area,
+    severity: item.severity,
+    status: item.status ?? "open",
+    title: item.title,
+    summary: item.summary,
+    subject: item.subject,
+    firstMs: chain[0].timeMs,
+    lastMs: chain[chain.length - 1].timeMs,
+    incidents: chain.length,
+    incidentsLast7Days: item.daysAgo.filter((d) => d < 7).length,
+    alert: item.alert,
+    longRunning: item.daysAgo[0] > 60,
+    causeSupported: item.findings.some((finding) => finding.certainty !== "correlated"),
+    chain,
+    findings: item.findings,
+    changesBefore: [],
+    advice: item.advice,
+    activity: [],
+  };
+}
+
+const moreCases: Case[] = [
+  sampleCase({
+    signal: "bsod",
+    area: "system",
+    severity: "critical",
+    title: "Blue screen: DRIVER_IRQL_NOT_LESS_OR_EQUAL",
+    summary: "A driver accessed memory it was not allowed to touch, and Windows stopped to protect itself.",
+    subject: "0x000000d1",
+    alert: "severe",
+    provider: "Microsoft-Windows-WER-SystemErrorReporting",
+    eventId: 1001,
+    message: "The computer has rebooted from a bugcheck. The bugcheck was: 0x000000d1 (0xffffd88a2c3f1010, 0x0000000000000002, 0x0000000000000000, 0xfffff8065e2a1b3c).",
+    daysAgo: [12, 4, 0.2],
+    findings: [
+      { certainty: "verified", text: "Windows stopped 3 times with stop code 0xD1 (DRIVER_IRQL_NOT_LESS_OR_EQUAL)." },
+      { certainty: "probable", text: "The crash dump names rtwlane.sys (Realtek Wi-Fi) as the module that faulted." },
+    ],
+    advice: [
+      { text: "Update or roll back the Wi-Fi driver from Device Manager.", tool: "device_manager" },
+      { text: "If it continues, test the memory with Windows Memory Diagnostic.", tool: "memory_diagnostic" },
+    ],
+  }),
+  sampleCase({
+    signal: "whea_fatal",
+    area: "hardware",
+    severity: "critical",
+    title: "Hardware reported a fatal error",
+    summary: "A component reported an error it could not recover from.",
+    subject: "Processor Core",
+    alert: "severe",
+    provider: "Microsoft-Windows-WHEA-Logger",
+    eventId: 18,
+    message: "A fatal hardware error has occurred. Component: Processor Core. Error Source: Machine Check Exception.",
+    daysAgo: [2],
+    findings: [
+      { certainty: "verified", text: "The processor reported a machine check it could not correct." },
+      { certainty: "correlated", text: "Overclocking, overheating and an unstable power supply all produce this. The record cannot tell which." },
+    ],
+    advice: [{ text: "Undo any overclock and check CPU temperature under load.", tool: "" }],
+  }),
+  sampleCase({
+    signal: "disk_failure_predicted",
+    area: "hardware",
+    severity: "critical",
+    title: "Disk predicts its own failure",
+    summary: "The disk reports that it expects to fail soon.",
+    subject: "\\Device\\Harddisk1\\DR1",
+    alert: "severe",
+    provider: "disk",
+    eventId: 52,
+    message: "The driver has detected that device \\Device\\Harddisk1\\DR1 has predicted that it will fail.",
+    daysAgo: [9, 1],
+    findings: [{ certainty: "verified", text: "Disk 1 reported a SMART failure prediction twice." }],
+    advice: [{ text: "Back up the files on this disk now, then plan to replace it.", tool: "" }],
+  }),
+  sampleCase({
+    signal: "disk_error",
+    area: "hardware",
+    severity: "critical",
+    title: "Disk read or write errors",
+    summary: "Windows could not complete some operations on a disk.",
+    subject: "\\Device\\Harddisk1\\DR1",
+    alert: "severe",
+    provider: "disk",
+    eventId: 7,
+    message: "The device, \\Device\\Harddisk1\\DR1, has a bad block.",
+    daysAgo: [8, 5, 1.5, 1],
+    findings: [
+      { certainty: "verified", text: "Disk 1 reported bad blocks 4 times." },
+      { certainty: "probable", text: "The same disk also predicts its own failure." },
+    ],
+    advice: [{ text: "Back up the files on this disk and check it with the maker's tool.", tool: "" }],
+  }),
+  sampleCase({
+    signal: "filesystem_corruption",
+    area: "hardware",
+    severity: "critical",
+    title: "File system corruption detected",
+    summary: "Windows found damaged file system structures on a volume.",
+    subject: "D:",
+    alert: "severe",
+    provider: "Ntfs",
+    eventId: 55,
+    message: "A corruption was discovered in the file system structure on volume D:.",
+    daysAgo: [3],
+    findings: [
+      { certainty: "verified", text: "NTFS reported damaged structures on volume D:." },
+      { certainty: "correlated", text: "Disk 1, which holds D:, also reports read errors." },
+    ],
+    advice: [{ text: "Run chkdsk D: /scan from an administrator command prompt.", tool: "" }],
+  }),
+  sampleCase({
+    signal: "whea_corrected",
+    area: "hardware",
+    severity: "warning",
+    title: "Hardware reported errors it corrected",
+    summary: "A component found errors and fixed them. Frequent corrected errors can come before a failure.",
+    subject: "PCI Express Root Port",
+    alert: "increased",
+    provider: "Microsoft-Windows-WHEA-Logger",
+    eventId: 17,
+    message: "A corrected hardware error has occurred. Component: PCI Express Root Port. Error Source: Advanced Error Reporting (PCI Express).",
+    daysAgo: [25, 6, 4, 3, 2, 2, 1, 0.5],
+    findings: [{ certainty: "verified", text: "A PCI Express port corrected 8 errors, 7 of them this week." }],
+    advice: [{ text: "Reseat the graphics card or NVMe drive and update the motherboard firmware.", tool: "" }],
+  }),
+  sampleCase({
+    signal: "disk_retry",
+    area: "hardware",
+    severity: "warning",
+    title: "Disk operations had to be retried",
+    summary: "Windows had to repeat some disk operations.",
+    subject: "\\Device\\Harddisk0\\DR0",
+    alert: "repeating",
+    provider: "disk",
+    eventId: 153,
+    message: "The IO operation at logical block address 0x1f3a2c0 for Disk 0 (PDO name: \\Device\\0000004a) was retried.",
+    daysAgo: [20, 14, 7, 2],
+    findings: [{ certainty: "verified", text: "Disk 0 retried operations on 4 different days." }],
+    advice: [{ text: "Check the disk's cable and update the storage controller driver.", tool: "device_manager" }],
+  }),
+  sampleCase({
+    signal: "storage_reset",
+    area: "hardware",
+    severity: "warning",
+    title: "Storage controller reset a device",
+    summary: "A disk stopped responding for long enough that Windows reset it.",
+    subject: "stornvme",
+    alert: "new",
+    provider: "stornvme",
+    eventId: 129,
+    message: "Reset to device, \\Device\\RaidPort0, was issued.",
+    daysAgo: [5, 2],
+    findings: [
+      { certainty: "verified", text: "The NVMe controller reset a device twice." },
+      { certainty: "correlated", text: "Power saving on the drive can cause this. So can a failing drive." },
+    ],
+    advice: [{ text: "Update the NVMe drive's firmware with the maker's tool.", tool: "" }],
+  }),
+  sampleCase({
+    signal: "driver_load_failed",
+    area: "driver",
+    severity: "notice",
+    title: "Driver failed to load: vmci",
+    summary: "Windows tried to load a driver during startup and could not.",
+    subject: "vmci",
+    alert: "",
+    provider: "Service Control Manager",
+    eventId: 7026,
+    message: "The following boot-start or system-start driver(s) did not load: vmci",
+    daysAgo: [40, 22, 10, 3],
+    findings: [{ certainty: "verified", text: "The driver vmci failed to load at 4 startups." }],
+    advice: [{ text: "If you no longer use the program that installed it, uninstall that program.", tool: "" }],
+  }),
+  sampleCase({
+    signal: "service_crash",
+    area: "software",
+    severity: "notice",
+    status: "watching",
+    title: "Service stopped unexpectedly: Print Spooler",
+    summary: "A Windows service ended without being asked to.",
+    subject: "Print Spooler",
+    alert: "",
+    provider: "Service Control Manager",
+    eventId: 7031,
+    message: "The Print Spooler service terminated unexpectedly. It has done this 1 time(s).",
+    daysAgo: [16, 15],
+    findings: [{ certainty: "verified", text: "Print Spooler stopped unexpectedly twice." }],
+    advice: [{ text: "Restart the service and remove printers you no longer use.", tool: "services" }],
+  }),
+  sampleCase({
+    signal: "app_crash",
+    area: "software",
+    severity: "warning",
+    title: "App crashed: Treasury.exe",
+    summary: "The program closed because of an error it could not handle.",
+    subject: "C:\\Users\\dev\\source\\Treasury\\desktop\\Treasury.exe",
+    alert: "repeating",
+    provider: "Application Error",
+    eventId: 1000,
+    message: "Faulting application name: Treasury.exe, version: 0.0.0.0. Faulting module name: KERNELBASE.dll. Exception code: 0xe0434352.",
+    daysAgo: [6, 3, 1, 0.1],
+    findings: [
+      { certainty: "verified", text: "Treasury.exe crashed 4 times." },
+      { certainty: "verified", text: "The latest crash was an unhandled .NET exception, reported in KERNELBASE.dll." },
+      { certainty: "verified", text: "Program path: C:\\Users\\dev\\source\\Treasury\\desktop\\Treasury.exe" },
+    ],
+    advice: [
+      { text: "Update or reinstall the program. If you develop it, its own logs or a debugger will show the failing code.", tool: "" },
+      { text: "See every crash of this program in Reliability Monitor.", tool: "reliability_monitor" },
+    ],
+  }),
+  sampleCase({
+    signal: "dev_crash",
+    area: "development",
+    severity: "warning",
+    title: "Dev server stopped with an error: npm run dev (shop)",
+    summary: "It had been running for 47 minutes and exited with code 1.",
+    subject: "npm run dev@C:\\Users\\dev\\source\\shop",
+    alert: "new",
+    provider: "WHY",
+    eventId: 2,
+    message: "",
+    daysAgo: [0.02],
+    findings: [
+      { certainty: "verified", text: "npm run dev stopped with an error 1 time." },
+      { certainty: "verified", text: "Exit code 1: a general error, which is how Node, Python and most tools report an uncaught exception." },
+      { certainty: "verified", text: "Command: npm run dev" },
+      { certainty: "verified", text: "Folder: C:\\Users\\dev\\source\\shop" },
+      { certainty: "verified", text: "The last lines it printed are kept in the terminal output. The error and its stack are usually at the end." },
+    ],
+    advice: [{ text: "Read the terminal output from the bottom up: the first line of the stack that points into your own code is where to start.", tool: "" }],
+  }),
+  sampleCase({
+    signal: "dev_failed",
+    area: "development",
+    severity: "notice",
+    title: "Command failed: tsc (shop)",
+    summary: "It exited with code 2 after 9 seconds.",
+    subject: "tsc@C:\\Users\\dev\\source\\shop",
+    alert: "",
+    provider: "WHY",
+    eventId: 1,
+    message: "",
+    daysAgo: [1.2, 0.3],
+    findings: [
+      { certainty: "verified", text: "tsc failed 2 times." },
+      { certainty: "verified", text: "Exit code 2." },
+      { certainty: "correlated", text: "WHY? saw it exit but cannot read a terminal it did not start, so the error text is not here." },
+    ],
+    advice: [{ text: "Start it through why-run, for example \"why-run npm run dev\", and WHY? keeps the error it prints next time.", tool: "" }],
+  }),
+  sampleCase({
+    signal: "av_detection",
+    area: "security",
+    severity: "critical",
+    title: "Microsoft Defender detected Behavior:Win32/Persistence.A!ml",
+    summary: "Defender found something it considers harmful and acted on it.",
+    subject: "Behavior:Win32/Persistence.A!ml",
+    alert: "severe",
+    provider: "Microsoft-Windows-Windows Defender",
+    eventId: 1116,
+    message: "Microsoft Defender Antivirus has detected malware or other potentially unwanted software.",
+    daysAgo: [0.05],
+    findings: [
+      { certainty: "verified", text: "Defender reported Behavior:Win32/Persistence.A!ml 1 time." },
+      { certainty: "verified", text: "Defender rates it: Severe, Suspicious Behavior." },
+      { certainty: "verified", text: "File involved: C:\\Users\\dev\\source\\Tool\\tool.exe" },
+      { certainty: "verified", text: "What Defender did: Quarantine." },
+      {
+        certainty: "correlated",
+        text: "This name comes from behaviour analysis, not from a known sample. Programs you build yourself, which nobody has signed yet, can trigger it when they start with Windows or ask for administrator rights.",
+      },
+    ],
+    advice: [{ text: "Open Windows Security to see the details, restore the file if you trust it, or remove it.", tool: "windows_security" }],
+  }),
+  sampleCase({
+    signal: "app_hang",
+    area: "software",
+    severity: "warning",
+    title: "App stopped responding: notepad++.exe",
+    summary: "The program stopped responding and was closed.",
+    subject: "C:\\Program Files\\Notepad++\\notepad++.exe",
+    alert: "new",
+    provider: "Application Hang",
+    eventId: 1002,
+    message: "The program notepad++.exe version 8.7.0.0 stopped interacting with Windows and was closed.",
+    daysAgo: [2],
+    findings: [{ certainty: "verified", text: "notepad++.exe stopped responding 1 time." }],
+    advice: [{ text: "See every crash of this program in Reliability Monitor.", tool: "reliability_monitor" }],
+  }),
+];
+
 // Invented data, to review the screens with a case richer than whatever this PC happens to have.
-const sample: State = {
+export const sample: State = {
   schema: 1,
   appVersion: "dev",
   releaseName: "WHY - Triage",
@@ -95,6 +411,7 @@ const sample: State = {
       advice: [{ text: "See when this started in Reliability Monitor.", tool: "reliability_monitor" }],
       activity: [],
     },
+    ...moreCases,
   ],
   timeline: [],
   changes: [],
@@ -104,6 +421,23 @@ const sample: State = {
   ],
   integrity: [],
 };
+// The engine's order: cases that need a look first, then the most severe, then the most recent.
+const severityRank = { critical: 0, warning: 1, notice: 2 } as const;
+const rank = (item: Case) => (item.alert ? 0 : item.status === "open" ? 1 : 2);
+sample.cases.sort((a, b) => rank(a) - rank(b) || severityRank[a.severity] - severityRank[b.severity] || b.lastMs - a.lastMs);
+const devServer = sample.cases.find((item) => item.signal === "dev_crash");
+if (devServer) {
+  devServer.output = [
+    " ✓ Ready in 2.1s",
+    " ○ Compiling /checkout ...",
+    " ⨯ TypeError: Cannot read properties of undefined (reading 'total')",
+    "    at CheckoutSummary (C:\\Users\\dev\\source\\shop\\app\\checkout\\summary.tsx:18:31)",
+    "    at renderWithHooks (C:\\Users\\dev\\source\\shop\\node_modules\\react-dom\\cjs\\react-dom-server.node.development.js:5658:16)",
+    "    at processTicksAndRejections (node:internal/process/task_queues:105:5)",
+    "",
+    "Node.js v22.12.0",
+  ].join("\n");
+}
 sample.timeline = sample.cases.flatMap((item) => item.chain).sort((a, b) => b.timeMs - a.timeMs);
 sample.changes = sample.cases.flatMap((item) => item.changesBefore).sort((a, b) => b.timeMs - a.timeMs);
 

@@ -1,7 +1,10 @@
 import { useMemo } from "react";
 import * as bridge from "../bridge";
 import { CertaintyMark } from "../components/CertaintyMark";
-import { alertLabels, areaLabels, changeKindLabels, changeVersion, formatDay, formatMoment, plural, relativeDay, signalLabels, sourceLabels, statusLabels } from "../format";
+import { CaseIcon, CaseRow, useCaseMenu } from "../components/CaseRow";
+import { copyText, useContextMenu } from "../components/ContextMenu";
+import { Icon } from "../components/Icon";
+import { changeKindLabels, changeVersion, formatDay, formatMoment, isFixed, plural, relativeDay, signalLabels, sourceLabels, statusLabels } from "../format";
 import type { Case, Certainty, Change, State, WhyEvent } from "../types";
 
 export function CaseList({ state, onOpenCase }: { state: State; onOpenCase: (key: string) => void }) {
@@ -18,23 +21,28 @@ export function CaseList({ state, onOpenCase }: { state: State; onOpenCase: (key
       <h1>Cases</h1>
       <p className="muted">Everything that went wrong, grouped by what it has in common. The ones that need a look come first.</p>
       <ul className="rows">
-        {state.cases.map((item) => (
-          <li key={item.key}>
-            <button className="row" onClick={() => onOpenCase(item.key)}>
-              <span className={`severity-bar severity-${item.alert ? item.severity : "none"}`} aria-hidden="true" />
-              <span className="row-main">
-                <strong>{item.title}</strong>
-                <span className="muted">
-                  {areaLabels[item.area]}. {plural(item.incidents, "time")}, last seen {relativeDay(item.lastMs, state.generatedMs)}.
-                </span>
-              </span>
-              <span className="row-side">
-                <span>{item.alert ? alertLabels[item.alert] : statusLabels[item.status]}</span>
-              </span>
-            </button>
-          </li>
-        ))}
+        {state.cases
+          .filter((item) => !isFixed(item))
+          .map((item) => (
+            <li key={item.key}>
+              <CaseRow item={item} now={state.generatedMs} onOpen={onOpenCase} />
+            </li>
+          ))}
       </ul>
+      {state.cases.some(isFixed) && (
+        <section>
+          <h2 className="section-title">
+            Marked as fixed <span className="muted section-note">WHY? keeps watching and brings them back if they happen again.</span>
+          </h2>
+          <ul className="rows">
+            {state.cases.filter(isFixed).map((item) => (
+              <li key={item.key}>
+                <CaseRow item={item} now={state.generatedMs} onOpen={onOpenCase} />
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
     </>
   );
 }
@@ -117,12 +125,20 @@ interface DetailProps {
 }
 
 export function CaseDetail({ item, isReport, now, onBack, onAction }: DetailProps) {
+  const openMenu = useContextMenu();
+  const menu = useCaseMenu(item);
   return (
     <article className="case">
-      <button className="link back" onClick={onBack}>
-        All cases
-      </button>
-      <h1>{item.title}</h1>
+      <nav className="breadcrumb" aria-label="Breadcrumb">
+        <button className="breadcrumb-link" onClick={onBack}>
+          Cases
+        </button>
+        <Icon name="chevron" />
+      </nav>
+      <div className="case-title" onContextMenu={(event) => openMenu(event, menu)}>
+        <CaseIcon item={item} size={36} />
+        <h1>{item.title}</h1>
+      </div>
       <p className="lead">{item.summary}</p>
       <p className="muted">
         {plural(item.incidents, "time")} since {formatDay(item.firstMs)}, last seen {relativeDay(item.lastMs, now)}. {statusLabels[item.status]}.
@@ -153,6 +169,29 @@ export function CaseDetail({ item, isReport, now, onBack, onAction }: DetailProp
         );
       })}
 
+      {item.output && (
+        <section>
+          <h2 className="section-title">
+            Terminal output
+            <button className="subtle copy" onClick={() => navigator.clipboard?.writeText(item.output ?? "")}>
+              Copy
+            </button>
+          </h2>
+          <pre
+            className="output"
+            onContextMenu={(event) => {
+              const selected = window.getSelection()?.toString() ?? "";
+              openMenu(event, [
+                ...(selected ? [{ label: "Copy selection", icon: "copy" as const, onSelect: () => copyText(selected) }] : []),
+                { label: "Copy all", icon: "copy", onSelect: () => copyText(item.output ?? "") },
+              ]);
+            }}
+          >
+            {item.output}
+          </pre>
+        </section>
+      )}
+
       <section>
         <h2 className="section-title">What to try</h2>
         <ul className="advice">
@@ -169,12 +208,12 @@ export function CaseDetail({ item, isReport, now, onBack, onAction }: DetailProp
         </ul>
         {!isReport && (
           <p className="action-line">
-            {item.status === "watching" || item.status === "recurred" || item.status === "resolved" ? (
+            {item.status === "watching" || item.status === "resolved" ? (
               <button className="quiet" onClick={() => onAction(() => bridge.caseAction(item.key, "reopen"))}>
-                Forget my fix
+                Reopen
               </button>
             ) : (
-              <button onClick={() => onAction(() => bridge.caseAction(item.key, "tried_fix"), "WHY? will tell you if this comes back.")}>I tried a fix</button>
+              <button onClick={() => onAction(() => bridge.caseAction(item.key, "tried_fix"), "Marked as fixed. It leaves Needs a look, and WHY? tells you if it comes back.")}>Mark as fixed</button>
             )}
             <span className="muted">WHY? changes nothing on your PC. It only watches whether this happens again.</span>
           </p>
@@ -215,6 +254,7 @@ const toolLabels: Record<string, string> = {
   reliability_monitor: "Open Reliability Monitor",
   memory_diagnostic: "Open Memory Diagnostic",
   services: "Open Services",
+  windows_security: "Open Windows Security",
 };
 
 const activityLabels: Record<string, string> = {

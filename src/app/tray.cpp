@@ -8,6 +8,7 @@
 #include <string>
 #include <thread>
 
+#include "app/notify.h"
 #include "engine/pipe.h"
 #include "engine/winutil.h"
 
@@ -23,11 +24,6 @@ constexpr UINT kCommandExit = 2;
 constexpr const wchar_t* kRegistryKey = L"Software\\WHY";
 constexpr const wchar_t* kLastNotified = L"LastNotifiedMs";
 
-struct Notification {
-    std::wstring title;
-    std::wstring body;
-};
-
 std::int64_t readLastNotified() {
     std::int64_t value = 0;
     DWORD size = sizeof(value);
@@ -41,38 +37,6 @@ void writeLastNotified(std::int64_t value) {
 
 void openApp() {
     ShellExecuteW(nullptr, L"open", executablePath().c_str(), nullptr, nullptr, SW_SHOWNORMAL);
-}
-
-void addIcon(HWND window, HINSTANCE instance) {
-    NOTIFYICONDATAW data{};
-    data.cbSize = sizeof(data);
-    data.hWnd = window;
-    data.uID = 1;
-    data.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
-    data.uCallbackMessage = kTrayMessage;
-    data.hIcon = LoadIconW(instance, MAKEINTRESOURCEW(1));
-    wcscpy_s(data.szTip, L"WHY? is watching this PC");
-    Shell_NotifyIconW(NIM_ADD, &data);
-}
-
-void removeIcon(HWND window) {
-    NOTIFYICONDATAW data{};
-    data.cbSize = sizeof(data);
-    data.hWnd = window;
-    data.uID = 1;
-    Shell_NotifyIconW(NIM_DELETE, &data);
-}
-
-void showNotification(HWND window, const Notification& note) {
-    NOTIFYICONDATAW data{};
-    data.cbSize = sizeof(data);
-    data.hWnd = window;
-    data.uID = 1;
-    data.uFlags = NIF_INFO;
-    data.dwInfoFlags = NIIF_USER | NIIF_LARGE_ICON;
-    wcsncpy_s(data.szInfoTitle, note.title.c_str(), _TRUNCATE);
-    wcsncpy_s(data.szInfo, note.body.c_str(), _TRUNCATE);
-    Shell_NotifyIconW(NIM_MODIFY, &data);
 }
 
 // Long-polls the monitor. A case notifies once per new occurrence, and only if it qualifies for an alert.
@@ -92,29 +56,11 @@ void watchMonitor(HWND window, std::atomic<bool>& running) {
 
         const auto stateReply = pipeRequest(R"({"cmd":"state"})");
         if (!stateReply) continue;
-        const auto state = json::parse(*stateReply, nullptr, false);
-        if (!state.is_object() || !state.contains("cases")) continue;
+        auto alert = freshAlert(*stateReply, lastNotified, loadSettings());
+        if (!alert) continue;
+        writeLastNotified(lastNotified);
 
-        int fresh = 0;
-        std::string firstTitle, firstSummary;
-        std::int64_t newest = lastNotified;
-        for (const auto& item : state["cases"]) {
-            if (item.value("alert", "").empty()) continue;
-            const auto last = item.value("lastMs", std::int64_t{0});
-            if (last <= lastNotified) continue;
-            newest = std::max(newest, last);
-            if (++fresh == 1) {
-                firstTitle = item.value("title", "");
-                firstSummary = item.value("summary", "");
-            }
-        }
-        if (fresh == 0) continue;
-        lastNotified = newest;
-        writeLastNotified(newest);
-
-        auto* note = new Notification;
-        note->title = fresh == 1 ? toWide(firstTitle) : std::to_wstring(fresh) + L" problems need a look";
-        note->body = fresh == 1 ? toWide(firstSummary) : L"Open WHY? to see what happened and what to try.";
+        auto* note = new Alert(std::move(*alert));
         if (!PostMessageW(window, kNotifyMessage, 0, reinterpret_cast<LPARAM>(note))) delete note;
     }
 }
@@ -138,12 +84,12 @@ LRESULT CALLBACK trayProc(HWND window, UINT message, WPARAM wparam, LPARAM lpara
             }
             return 0;
         case kNotifyMessage: {
-            std::unique_ptr<Notification> note(reinterpret_cast<Notification*>(lparam));
-            showNotification(window, *note);
+            std::unique_ptr<Alert> note(reinterpret_cast<Alert*>(lparam));
+            showAlert(window, *note);
             return 0;
         }
         case WM_DESTROY:
-            removeIcon(window);
+            removeNotifyIcon(window);
             PostQuitMessage(0);
             return 0;
         default:
@@ -166,7 +112,7 @@ int runTray(HINSTANCE instance) {
     const HWND window = CreateWindowExW(0, windowClass.lpszClassName, L"WHY?", 0, 0, 0, 0, 0, HWND_MESSAGE, nullptr, instance, nullptr);
     if (!window) return 1;
 
-    addIcon(window, instance);
+    addNotifyIcon(window, kTrayMessage, L"WHY? is watching this PC");
 
     std::atomic<bool> running{true};
     std::thread([window, &running] { watchMonitor(window, running); }).detach();

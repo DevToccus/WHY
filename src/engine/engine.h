@@ -9,7 +9,10 @@ namespace why {
 struct EngineOptions {
     std::string databasePath = ":memory:";
     std::string mode = "investigation";  // live or investigation.
-    int historyDays = 180;
+    int historyDays = 365;  // A year, so the Home charts can show one.
+    // Where the person's own statements about cases ("I tried a fix") are kept when the database is not.
+    // One JSON object per line. Empty keeps them only as long as the database.
+    std::wstring overridesPath;
 };
 
 class Engine {

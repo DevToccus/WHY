@@ -5,6 +5,8 @@
 #include <algorithm>
 #include <atomic>
 #include <condition_variable>
+#include <filesystem>
+#include <fstream>
 #include <map>
 #include <mutex>
 #include <nlohmann/json.hpp>
@@ -12,6 +14,7 @@
 #include <thread>
 #include <vector>
 
+#include "collect/devwatch.h"
 #include "collect/drivers.h"
 #include "collect/dumps.h"
 #include "collect/etw.h"
@@ -37,7 +40,7 @@ constexpr auto kRecorderFlushEvery = std::chrono::minutes(1);
 constexpr auto kInventoryEvery = std::chrono::hours(6);
 // A busy PC can overwrite the whole journal in about an hour, so it has to be read more often than that.
 constexpr auto kJournalEvery = std::chrono::minutes(30);
-constexpr std::size_t kMaxTimeline = 1000;
+constexpr std::size_t kMaxTimeline = 5000;  // Enough records for the Home charts to cover a year.
 constexpr std::size_t kMaxChanges = 500;
 constexpr std::int64_t kActivityWindowMs = 10 * kMinuteMs;
 constexpr std::size_t kMaxActivityPerCase = 200;
@@ -90,6 +93,7 @@ struct Engine::Impl {
     std::unique_ptr<Store> store;
     std::unique_ptr<ActivityRecorder> recorder;
     std::unique_ptr<EventWatcher> watcher;
+    std::unique_ptr<DevWatcher> devWatcher;
 
     // Everything below is touched only by the worker thread, except where a mutex says otherwise.
     std::vector<DumpInfo> dumps;
@@ -122,6 +126,28 @@ struct Engine::Impl {
     explicit Impl(EngineOptions opts) : options(std::move(opts)), store(std::make_unique<Store>(options.databasePath)) {
         if (const auto cursor = store->getMeta("usn_cursor")) usnCursor = std::stoll(*cursor);
         if (const auto journal = store->getMeta("usn_journal")) usnJournal = std::stoull(*journal);
+        loadKeptOverrides();
+    }
+
+    // Without Live monitoring the database lives in memory; the person's fixes must outlive the window.
+    void loadKeptOverrides() {
+        if (options.overridesPath.empty()) return;
+        std::ifstream file(std::filesystem::path(options.overridesPath));
+        std::string line;
+        while (std::getline(file, line)) {
+            const auto item = json::parse(line, nullptr, false);
+            if (!item.is_object()) continue;
+            CaseOverride entry{item.value("key", ""), item.value("action", ""), item.value("atMs", std::int64_t{0})};
+            if (!entry.key.empty() && (entry.action == "tried_fix" || entry.action == "reopen")) store->addOverride(entry);
+        }
+    }
+
+    void keepOverride(const CaseOverride& entry) {
+        if (options.overridesPath.empty()) return;
+        const std::filesystem::path path(options.overridesPath);
+        std::error_code ignored;
+        std::filesystem::create_directories(path.parent_path(), ignored);
+        std::ofstream(path, std::ios::app) << json{{"key", entry.key}, {"action", entry.action}, {"atMs", entry.atMs}}.dump() << "\n";
     }
 
     void scanEvents(int days) {
@@ -129,8 +155,8 @@ struct Engine::Impl {
         store->addEvents(history.events);
         if (history.oldestLogMs) historyStartMs = history.oldestLogMs;
 
-        Coverage entry{"event_log", "Windows System log", history.error.empty() ? "ok" : "limited", history.error, 0, history.oldestLogMs};
-        if (entry.detail.empty()) entry.detail = "Blue screens, restarts, driver, disk and hardware errors.";
+        Coverage entry{"event_log", "Windows event logs", history.error.empty() ? "ok" : "limited", history.error, 0, history.oldestLogMs};
+        if (entry.detail.empty()) entry.detail = "Blue screens, restarts, driver, disk and hardware errors, programs that crash or hang, and Microsoft Defender detections.";
         upsertCoverage(entry);
     }
 
@@ -352,6 +378,16 @@ struct Engine::Impl {
             incoming.push_back(std::move(event));
             queueSignal.notify_one();
         });
+        devWatcher = std::make_unique<DevWatcher>([this](Event event) {
+            const std::lock_guard lock(queueMutex);
+            incoming.push_back(std::move(event));
+            queueSignal.notify_one();
+        });
+        upsertCoverage({"dev", "Development tools", "ok",
+                        "Dev servers and commands (Node, Python, .NET, Java, Go and others) that exit with an error, and commands run "
+                        "through why-run with their error output.",
+                        0, 0});
+        recompute(false);
 
         auto lastFlush = std::chrono::steady_clock::now();
         auto lastInventory = lastFlush;
@@ -400,6 +436,7 @@ struct Engine::Impl {
         }
 
         watcher.reset();
+        devWatcher.reset();
         flushRecorder();
         if (recorder) recorder->stop();
         store->setMeta("clean_stop", "1");
@@ -450,8 +487,10 @@ bool Engine::applyCaseAction(const std::string& key, const std::string& action) 
         const std::lock_guard lock(impl_->stateMutex);
         if (!impl_->knownCases.contains(key)) return false;
     }
+    const CaseOverride entry{key, action, nowUnixMs()};
     const std::lock_guard lock(impl_->queueMutex);
-    impl_->incomingOverrides.push_back({key, action, nowUnixMs()});
+    impl_->keepOverride(entry);
+    impl_->incomingOverrides.push_back(entry);
     impl_->queueSignal.notify_one();
     return true;
 }
