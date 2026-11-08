@@ -44,6 +44,9 @@ function sampleCase(item: Sample): Case {
     changesBefore: [],
     advice: item.advice,
     activity: [],
+    origin: item.signal.startsWith("av_") ? "" : "error",
+    originText: "Windows records this only when something fails on its own. Closing a program or the PC is not logged this way.",
+    fixedMs: 0,
   };
 }
 

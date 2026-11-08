@@ -1,7 +1,7 @@
 import { useState } from "react";
 import * as bridge from "../bridge";
 import { Icon } from "../components/Icon";
-import { StartupOptions } from "../components/Options";
+import { RunModeOptions } from "../components/Options";
 import { formatMoment } from "../format";
 import type { Settings, State } from "../types";
 
@@ -15,6 +15,7 @@ interface Props {
 // Each change applies at once, as in Windows Settings.
 export function SettingsScreen({ state, settings, onChange, onAction }: Props) {
   const isReport = state.mode === "report";
+  const live = state.mode === "live";
   const [error, setError] = useState<string | null>(null);
 
   const apply = async (next: Settings) => {
@@ -29,34 +30,26 @@ export function SettingsScreen({ state, settings, onChange, onAction }: Props) {
       <h1>Settings</h1>
       {error && <p className="tone-critical">{error}</p>}
 
-      <section>
-        <h2 className="section-title">Startup and background</h2>
-        <StartupOptions value={settings} onChange={(next) => apply({ ...settings, ...next })} />
-      </section>
-
       {!isReport && (
         <section>
-          <h2 className="section-title">Live monitoring</h2>
-          <div className="row static">
-            <span className="severity-icon">
-              <Icon name="monitor" />
-            </span>
-            <span className="row-main">
-              <strong>{state.mode === "live" ? "Live monitoring is on" : "Live monitoring is off"}</strong>
-              <span className="muted">
-                {state.mode === "live"
-                  ? "A background service keeps history, reads everything as administrator and notifies you. It only observes."
-                  : "A background service that keeps history and reads everything as administrator, even when WHY? is closed. Installing needs administrator rights."}
-              </span>
-            </span>
-            {state.mode === "live" ? (
-              <button className="quiet" onClick={() => onAction(bridge.uninstallLive, "Live monitoring and its history were removed.")}>
-                Remove
-              </button>
-            ) : (
-              <button onClick={() => onAction(bridge.installLive, "Live monitoring is installed and running.")}>Install</button>
-            )}
-          </div>
+          <h2 className="section-title">How WHY? runs</h2>
+          <RunModeOptions
+            mode={live ? "live" : "app"}
+            onMode={(next) => {
+              if (next === "live" && !live) {
+                onAction(async () => {
+                  const result = await bridge.installLive();
+                  // The service starts with Windows and reads as administrator, so the app's own startup choices go.
+                  if (result.ok) await apply({ ...settings, runAsAdmin: false, startAtLogin: false, keepInBackground: false });
+                  return result;
+                }, "WHY? is now always watching.");
+              } else if (next === "app" && live) {
+                onAction(bridge.uninstallLive, "The background service and its history were removed.");
+              }
+            }}
+            startup={settings}
+            onStartup={(next) => apply({ ...settings, ...next })}
+          />
         </section>
       )}
 

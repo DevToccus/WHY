@@ -103,9 +103,18 @@ private:
     Engine engine_;
 };
 
+// Asks for the state rather than waiting on a revision: a monitor still busy with its first scan would hold a wait for a minute.
+bool monitorAnswers() { return pipeRequest(R"({"cmd":"state"})").has_value(); }
+
 std::shared_ptr<Backend> connectBackend() {
-    if (pipeRequest(R"({"cmd":"wait","rev":0})").has_value()) return std::make_shared<RemoteBackend>();
+    if (monitorAnswers()) return std::make_shared<RemoteBackend>();
     return std::make_shared<LocalBackend>();
+}
+
+// Sent by a second launch to the window already running, so it shows itself from its own process.
+UINT activateMessage() {
+    static const UINT message = RegisterWindowMessageW(L"WHY-Activate");
+    return message;
 }
 
 bool systemUsesDarkTheme() {
@@ -245,7 +254,9 @@ public:
 
     int run() {
         createWindow();
-        startWebView();
+        // The engine runs from the start, so a window that starts hidden at sign-in still notices and notifies.
+        startBackend();
+        if (!background_) ensureWebView();
         MSG message{};
         while (GetMessageW(&message, nullptr, 0, 0) > 0) {
             TranslateMessage(&message);
@@ -274,6 +285,8 @@ private:
 
         window_ = CreateWindowExW(0, kClassName, toWide(WHY_RELEASE_NAME).c_str(), WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 1240, 820, nullptr, nullptr, instance_, this);
         THROW_LAST_ERROR_IF_NULL(window_);
+        // An elevated window must still hear a launch that is not elevated.
+        ChangeWindowMessageFilterEx(window_, activateMessage(), MSGFLT_ALLOW, nullptr);
         const BOOL dark = systemUsesDarkTheme();
         DwmSetWindowAttribute(window_, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark, sizeof(dark));
         // Mica, like the Windows 11 built-in tools. Older builds reject the attribute and keep the solid background.
@@ -296,7 +309,21 @@ private:
         notifyIcon_ = true;
     }
 
+    // A window started hidden at sign-in creates its WebView2 only when first shown. Created behind a hidden window,
+    // WebView2 can stay blank once the window appears; waiting also keeps its processes out of the sign-in rush.
+    void ensureWebView() {
+        if (webViewStarted_) return;
+        webViewStarted_ = true;
+        startWebView();
+    }
+
+    // WebView2 should know when its window is hidden or minimised, so it can stop painting and resume afterwards.
+    void setWebViewVisible(bool visible) {
+        if (controller_) controller_->put_IsVisible(visible ? TRUE : FALSE);
+    }
+
     void bringToFront() {
+        ensureWebView();
         ShowWindow(window_, SW_SHOW);
         ShowWindow(window_, SW_RESTORE);
         SetForegroundWindow(window_);
@@ -414,9 +441,9 @@ private:
             }).Get(),
             &token);
 
+        setWebViewVisible(IsWindowVisible(window_) && !IsIconic(window_));
         resize();
         webview_->Navigate(kOrigin);
-        startBackend();
     }
 
     wil::com_ptr<IStream> uiStream() {
@@ -626,7 +653,7 @@ private:
             if (exitCode != 0) return reply(id, R"({"ok":false,"error":"Windows could not complete the change."})");
             if (installing) {
                 // The service needs a moment before it accepts connections.
-                for (int i = 0; i < 20 && !pipeRequest(R"({"cmd":"wait","rev":0})"); ++i) Sleep(250);
+                for (int i = 0; i < 20 && !monitorAnswers(); ++i) Sleep(250);
             }
             setBackend(connectBackend());
             reply(id, R"({"ok":true})");
@@ -659,8 +686,17 @@ private:
         auto* self = reinterpret_cast<AppWindow*>(GetWindowLongPtrW(window, GWLP_USERDATA));
         switch (message) {
             case WM_SIZE:
-                if (self) self->resize();
+                if (self) {
+                    self->setWebViewVisible(wparam != SIZE_MINIMIZED);
+                    self->resize();
+                }
                 return 0;
+            case WM_SHOWWINDOW:
+                if (self) {
+                    if (wparam) self->ensureWebView();
+                    self->setWebViewVisible(wparam != FALSE);
+                }
+                return DefWindowProcW(window, message, wparam, lparam);
             case WM_DPICHANGED: {
                 const auto* rect = reinterpret_cast<RECT*>(lparam);
                 SetWindowPos(window, nullptr, rect->left, rect->top, rect->right - rect->left, rect->bottom - rect->top, SWP_NOZORDER | SWP_NOACTIVATE);
@@ -706,6 +742,10 @@ private:
                 PostQuitMessage(0);
                 return 0;
             default:
+                if (self && message == activateMessage()) {
+                    self->bringToFront();
+                    return 0;
+                }
                 return DefWindowProcW(window, message, wparam, lparam);
         }
     }
@@ -715,6 +755,7 @@ private:
     std::optional<std::wstring> startupReport_;
     HWND window_ = nullptr;
     bool mica_ = false;
+    bool webViewStarted_ = false;
     bool notifyIcon_ = false;
     bool background_ = false;
     bool quitting_ = false;
@@ -740,9 +781,15 @@ int runWindow(HINSTANCE instance, const std::optional<std::wstring>& reportPath,
         // Started again at sign-in while already running: nothing to show.
         if (background) return 0;
         if (const HWND existing = FindWindowW(kClassName, nullptr)) {
-            ShowWindow(existing, SW_SHOW);
-            ShowWindow(existing, SW_RESTORE);
-            SetForegroundWindow(existing);
+            // This launch holds the right to take the foreground; pass it on, and let the window show itself.
+            DWORD owner = 0;
+            GetWindowThreadProcessId(existing, &owner);
+            AllowSetForegroundWindow(owner);
+            if (!PostMessageW(existing, activateMessage(), 0, 0)) {
+                ShowWindow(existing, SW_SHOW);
+                ShowWindow(existing, SW_RESTORE);
+                SetForegroundWindow(existing);
+            }
         }
         return 0;
     }

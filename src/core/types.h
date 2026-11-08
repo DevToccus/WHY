@@ -112,6 +112,10 @@ struct Case {
     std::vector<ActivityRecord> activity;
     std::string output;  // The last lines a failed command printed, when why-run captured them.
     std::string image;   // The program the case is about, when there is one, so the UI can show its icon.
+    // Whether this was a real error or a forced closure: error, forced or unclear. Empty when the question does not apply.
+    std::string origin;
+    std::string originText;  // Why WHY? says so, in one or two sentences.
+    std::int64_t fixedMs = 0;  // When the person last marked it as fixed, 0 if never.
 };
 
 // A person's statement about a case, kept apart from the facts.

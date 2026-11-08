@@ -33,6 +33,13 @@ const navigation: { id: Screen; label: string; icon: IconName }[] = [
   { id: "changes", label: "What changed", icon: "changes" },
 ];
 
+// "v0.1.0 · Triage": the code name without the "WHY -" the brand already shows.
+function versionLine(state: State) {
+  const codename = (state.releaseName ?? "").replace(/^WHY\??\s*[-–]\s*/i, "");
+  const version = /^\d/.test(state.appVersion ?? "") ? `v${state.appVersion}` : state.appVersion;
+  return [version, codename].filter(Boolean).join(" · ");
+}
+
 async function loadState(): Promise<State> {
   if (bridge.hasHost) return bridge.getState();
   if (import.meta.env.DEV) {
@@ -56,6 +63,8 @@ export default function App() {
     loadState()
       .then((next) => {
         if (next.schema) setState(next);
+        // The engine may still be starting. Ask again rather than wait for a change that may take a while.
+        else window.setTimeout(refresh, 1000);
       })
       .catch((error: Error) => setMessage(error.message));
   }, []);
@@ -105,6 +114,7 @@ export default function App() {
       <SetupScreen
         initial={settings}
         elevated={elevated}
+        liveInstalled={state?.mode === "live"}
         onDone={(done) => {
           setSettings(done);
           setScreen("status");
@@ -139,8 +149,8 @@ export default function App() {
           <img className="brand-logo" src={logo} alt="" width="32" height="32" />
           <span>
             <strong>WHY?</strong>
-            {/* A report carries the name of the version that saved it, which may not be the one running. */}
-            {!isReport && state.releaseName && <span className="release muted">{state.releaseName}</span>}
+            {/* A report carries the version that saved it, which may not be the one running. */}
+            {!isReport && <span className="release muted">{versionLine(state)}</span>}
           </span>
         </div>
         <ul>

@@ -40,8 +40,10 @@
   --notice: rgba(0, 0, 0, 0.446);
   --infobar-critical: #fde7e9;
   --infobar-caution: #fff4ce;
+  --infobar-notice: #e8f1fb;
   --badge-critical: #c42b1c;
   --badge-caution: #9d5d00;
+  --badge-notice: #0067c0;
   --badge-neutral: #8a8a8a;
   --on-badge: #ffffff;
   --glow: transparent;
@@ -104,8 +106,10 @@
     --notice: rgba(255, 255, 255, 0.544);
     --infobar-critical: #442726;
     --infobar-caution: #433519;
+  --infobar-notice: #1f3242;
     --badge-critical: #ff99a4;
     --badge-caution: #fce100;
+  --badge-notice: #4cc2ff;
     --badge-neutral: #9d9d9d;
     --on-badge: #000000;
     --glow: rgba(76, 194, 255, 0.45);
@@ -321,7 +325,8 @@ input[type="checkbox"] {
 
 .brand strong {
   display: block;
-  font: 600 14px/18px var(--body);
+  font: 700 26px/30px var(--display);
+  letter-spacing: -0.01em;
 }
 
 .brand-mark {
@@ -337,6 +342,7 @@ input[type="checkbox"] {
 
 .release {
   display: block;
+  margin-top: 1px;
   font: 12px/16px var(--small);
 }
 
@@ -589,10 +595,6 @@ input[type="checkbox"] {
   font-weight: 600;
 }
 .tone-notice,
-.tone-quiet {
-  color: var(--muted);
-}
-
 /* Charts */
 .bar-serious {
   stroke: var(--serious);
@@ -768,6 +770,307 @@ button.row:active {
   line-height: 22px;
 }
 
+.case-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.case-head > button {
+  flex: none;
+}
+
+/* The facts of a case at a glance, as a row of small tiles. */
+.case-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 4px;
+  margin: 16px 0 0;
+}
+
+.fact {
+  background: var(--card);
+  border: 1px solid var(--card-stroke);
+  border-radius: 6px;
+  padding: 8px 12px;
+  min-width: 0;
+}
+
+.fact dt {
+  font: 12px/16px var(--small);
+  color: var(--muted);
+}
+
+.fact dd {
+  margin: 2px 0 0;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.fact-critical {
+  background: var(--infobar-critical);
+}
+
+.fact-warning {
+  background: var(--infobar-caution);
+}
+
+.fact-notice {
+  background: var(--infobar-notice);
+}
+
+.fact-icon {
+  margin-right: 6px;
+  vertical-align: -3px;
+}
+
+.recurred-note {
+  padding: 10px 14px;
+  border-radius: 6px;
+  background: var(--infobar-caution);
+  max-width: none;
+}
+
+/* Real error or forced closure: the first thing to know before trying a fix. */
+.origin {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 12px 14px;
+  margin-bottom: 8px;
+  border-radius: 6px;
+  background: var(--subtle-hover);
+}
+
+.origin > span:last-child {
+  display: grid;
+  gap: 2px;
+}
+
+.origin-icon {
+  margin-top: 2px;
+}
+
+.finding-group + .finding-group {
+  margin-top: 14px;
+}
+
+.finding-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 4px;
+  font: 600 13px/18px var(--body);
+  color: var(--muted);
+}
+
+.findings {
+  padding-left: 22px;
+}
+
+/* What happened: a short story, then one line of time with every moment and every change on it. */
+.story-summary {
+  font-size: 15px;
+  line-height: 22px;
+  margin: 0 0 14px;
+}
+
+.story-line {
+  position: relative;
+  padding-left: 28px;
+}
+
+.story-line::before {
+  content: "";
+  position: absolute;
+  left: 9px;
+  top: 8px;
+  bottom: 8px;
+  width: 2px;
+  background: var(--divider);
+}
+
+.story-entry {
+  position: relative;
+  padding: 6px 0 10px;
+}
+
+.story-gap {
+  display: block;
+  margin-bottom: 8px;
+  font: italic 12px/16px var(--small);
+  color: var(--faint);
+}
+
+.story-mark {
+  position: absolute;
+  left: -27px;
+  top: 7px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  box-shadow: 0 0 0 3px var(--card-solid);
+}
+
+.story-gap + .story-mark {
+  top: 31px;
+}
+
+.mark-critical {
+  background: var(--badge-critical);
+}
+
+.mark-warning {
+  background: var(--badge-caution);
+}
+
+.mark-notice {
+  background: var(--badge-notice);
+}
+
+.mark-change {
+  background: var(--card-solid);
+  border: 2px solid var(--accent);
+  color: var(--accent);
+}
+
+.mark-change .icon {
+  font-size: 9px;
+  width: auto;
+}
+
+.story-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.story-head strong {
+  font-weight: 600;
+}
+
+.story-head time {
+  font-size: 12px;
+  margin-left: auto;
+}
+
+.story-tag {
+  padding: 0 8px;
+  border-radius: 10px;
+  background: var(--divider);
+  font: 600 11px/18px var(--small);
+}
+
+.story-detail {
+  margin: 2px 0 0;
+  color: var(--muted);
+}
+
+.story-raw {
+  margin-top: 4px;
+}
+
+.story-raw summary {
+  font: 12px/18px var(--small);
+  color: var(--accent-text);
+  cursor: default;
+  width: max-content;
+}
+
+.raw-record {
+  display: grid;
+  gap: 2px;
+  margin-top: 6px;
+  padding: 8px 10px;
+  border-radius: 4px;
+  background: var(--subtle-hover);
+  font: 12px/17px var(--mono);
+  overflow-wrap: anywhere;
+}
+
+.raw-record .muted {
+  font-family: var(--small);
+}
+
+.story-fold {
+  padding: 4px 0 10px;
+}
+
+.story-fold button {
+  min-height: 28px;
+  margin-left: -8px;
+  color: var(--accent-text);
+}
+
+.fold-icon {
+  font-size: 10px;
+  transform: rotate(90deg);
+}
+
+.story-note {
+  font-size: 12px;
+  margin-top: 4px;
+}
+
+/* Cases list */
+.page-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.severity-key {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font: 12px/16px var(--small);
+  margin: 4px 0 0;
+}
+
+.key-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  margin-left: 8px;
+}
+
+.key-swatch:first-child {
+  margin-left: 0;
+}
+
+.key-critical {
+  background: var(--badge-critical);
+}
+
+.key-warning {
+  background: var(--badge-caution);
+}
+
+.key-notice {
+  background: var(--badge-notice);
+}
+
+.case-group {
+  margin-top: 20px;
+}
+
+.case-group .section-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.case-group .section-note {
+  margin-left: 0;
+}
+
+
 .certainty {
   display: inline-flex;
   align-items: center;
@@ -803,11 +1106,25 @@ button.row:active {
 
 .advice li {
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  gap: 16px;
+  gap: 12px;
   padding: 10px 0;
   border-top: 1px solid var(--divider);
+}
+
+.advice-step {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--divider);
+  font: 600 12px/1 var(--small);
+}
+
+.advice-text {
+  flex: 1;
 }
 
 .advice li:first-child {
@@ -821,88 +1138,6 @@ button.row:active {
   align-items: center;
   max-width: none;
   margin-top: 12px;
-}
-
-.evidence-note {
-  margin-top: 20px;
-  font-size: 12px;
-}
-
-/* The spine: changes on the left, failures on the right, one line of time between them. */
-.spine-heads,
-.spine-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 40px minmax(0, 1fr);
-}
-
-.spine-heads {
-  font: 600 12px/16px var(--small);
-  color: var(--muted);
-  padding-bottom: 6px;
-}
-
-.spine-heads span:first-child {
-  text-align: right;
-}
-
-.spine ol {
-  background: linear-gradient(var(--divider), var(--divider)) center / 2px 100% no-repeat;
-}
-
-.spine-row {
-  align-items: center;
-  padding: 10px 0;
-}
-
-.spine-cell {
-  display: grid;
-  gap: 1px;
-  min-width: 0;
-}
-
-.spine-cell strong {
-  font-weight: 600;
-  overflow-wrap: anywhere;
-}
-
-.spine-left {
-  text-align: right;
-}
-
-.spine-message {
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  overflow: hidden;
-  font-size: 12px;
-  line-height: 16px;
-}
-
-.spine-cell time {
-  font-size: 12px;
-}
-
-.spine-mark {
-  justify-self: center;
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  background: var(--card-solid);
-  border: 2px solid var(--muted);
-}
-
-.spine-problem .spine-mark {
-  border-width: 0;
-}
-
-.spine-problem .severity-warning {
-  background: var(--warning);
-}
-.spine-problem .severity-critical {
-  background: var(--critical);
-}
-.spine-problem .severity-notice {
-  background: var(--muted);
 }
 
 .activity summary {
@@ -1193,6 +1428,10 @@ button.row:active {
   gap: 8px;
 }
 
+.choice-grid-two {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
 .choice {
   display: grid;
   justify-items: start;
@@ -1354,45 +1593,35 @@ button:disabled {
   background: var(--infobar-caution);
 }
 
+.infobar-notice {
+  background: var(--infobar-notice);
+}
+
 button.infobar-critical:hover,
-button.infobar-warning:hover {
-  filter: brightness(1.06);
+button.infobar-warning:hover,
+button.infobar-notice:hover {
+  filter: brightness(1.04);
 }
 
-.infobar .row-main strong {
+/* What needs a look: a coloured edge and a bold title, on top of the severity tint every case has. */
+.infobar-critical {
+  --edge: var(--badge-critical);
+}
+
+.infobar-warning {
+  --edge: var(--badge-caution);
+}
+
+.infobar-notice {
+  --edge: var(--badge-notice);
+}
+
+.infobar.is-alert {
+  box-shadow: inset 3px 0 0 var(--edge, transparent);
+}
+
+.infobar.is-alert .row-main strong {
   font-weight: 600;
-}
-
-.infobar-badge {
-  display: grid;
-  place-items: center;
-  width: 16px;
-  height: 16px;
-  margin-left: 2px;
-  border-radius: 50%;
-  font: 700 11px/1 var(--body);
-}
-
-.infobar-badge .icon {
-  font-size: 8px;
-  width: auto;
-  font-weight: 700;
-}
-
-.badge-critical {
-  background: var(--badge-critical);
-  color: var(--on-badge);
-}
-
-.badge-warning {
-  background: var(--badge-caution);
-  color: var(--on-badge);
-}
-
-.badge-notice,
-.badge-quiet {
-  background: var(--badge-neutral);
-  color: var(--on-badge);
 }
 
 /* Hero: one line of verdict, two small figures on the right. */
@@ -2257,15 +2486,8 @@ button.infobar-warning:hover {
   position: absolute;
   right: -4px;
   bottom: -4px;
-  width: 13px;
-  height: 13px;
-  margin: 0;
-  font-size: 9px;
+  border-radius: 50%;
   box-shadow: 0 0 0 2px var(--card-solid);
-}
-
-.case-icon .badge-small .icon {
-  font-size: 6px;
 }
 
 .case-title {
@@ -2286,28 +2508,18 @@ button.infobar-warning:hover {
 
 /* Home: the way into Cases, on the right of the verdict */
 .hero-action {
-  display: grid;
-  justify-items: start;
-  gap: 2px;
-  min-width: 132px;
-  padding: 10px 14px;
-  border-radius: 6px;
-  text-align: left;
-}
-
-.hero-action strong {
-  font: 600 22px/28px var(--display);
-}
-
-.hero-action-label {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  font: 600 12px/16px var(--small);
+  gap: 8px;
+  min-width: 96px;
+  justify-content: center;
+  padding: 8px 18px;
+  border-radius: 6px;
+  font: 600 16px/22px var(--display);
 }
 
-.hero-action-label .icon {
-  font-size: 10px;
+.hero-action .icon {
+  font-size: 11px;
   width: auto;
 }
 
@@ -2579,11 +2791,47 @@ button.infobar-warning:hover {
 }
 
 /* A case the person marked as fixed: a green check, no tint */
-.badge-fixed {
-  background: var(--ok);
-  color: var(--card-solid);
-}
-
 .infobar-fixed .row-main strong {
   font-weight: 400;
+}
+
+/* Windows 11 status glyph: a filled circle behind, the symbol in front, both from Segoe Fluent Icons. */
+.status-icon {
+  display: inline-grid;
+  flex: none;
+  width: 1em;
+  height: 1em;
+  font-family: var(--icons);
+  font-style: normal;
+  font-weight: normal;
+  line-height: 1;
+  speak: never;
+}
+
+.status-icon > span {
+  grid-area: 1 / 1;
+}
+
+.status-front {
+  color: var(--on-badge);
+}
+
+.status-critical .status-back {
+  color: var(--badge-critical);
+}
+
+.status-warning .status-back {
+  color: var(--badge-caution);
+}
+
+.status-notice .status-back {
+  color: var(--badge-notice);
+}
+
+.status-fixed .status-back {
+  color: var(--ok);
+}
+
+.status-unclear .status-back {
+  color: var(--badge-neutral);
 }

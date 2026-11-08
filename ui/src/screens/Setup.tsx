@@ -1,32 +1,53 @@
 import { useState } from "react";
 import logo from "../assets/logo.png";
 import * as bridge from "../bridge";
-import { FocusOptions, StartupOptions } from "../components/Options";
+import { FocusOptions, RunModeOptions, type RunMode } from "../components/Options";
 import { focusName, hasFocus } from "../focus";
 import type { Settings } from "../types";
 
 interface Props {
   initial: Settings;
   elevated: boolean;
+  liveInstalled: boolean;
   onDone: (settings: Settings) => void;
 }
 
 const steps = ["Welcome", "How WHY? runs", "Focus", "All set"];
 
 // The first run: a few choices that make WHY? work better, asked once, as Windows asks during its own setup.
-export function SetupScreen({ initial, elevated, onDone }: Props) {
+export function SetupScreen({ initial, elevated, liveInstalled, onDone }: Props) {
   const [step, setStep] = useState(0);
   const [settings, setSettings] = useState<Settings>(initial);
+  // Always watching is the recommended choice. Someone running setup again keeps what they have.
+  const [mode, setMode] = useState<RunMode>(liveInstalled || !initial.setupDone ? "live" : "app");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
   const focusIncomplete = settings.focusKind !== "" && !settings.focusTarget;
-  const restartNeeded = settings.runAsAdmin && !elevated;
+  const live = mode === "live";
+  const restartNeeded = !live && settings.runAsAdmin && !elevated;
 
   const finish = async () => {
     setSaving(true);
     setError(null);
-    const done = { ...settings, setupDone: true };
+    // The service and its notifier already start with Windows and read as administrator, so the app's own choices are off.
+    const done = live
+      ? { ...settings, runAsAdmin: false, startAtLogin: false, keepInBackground: false, setupDone: true }
+      : { ...settings, setupDone: true };
+    if (live !== liveInstalled) {
+      const change = await (live ? bridge.installLive() : bridge.uninstallLive());
+      if (!change.ok) {
+        setSaving(false);
+        setError(
+          change.cancelled
+            ? live
+              ? "Windows did not give permission, so nothing was installed. Try again, or choose Only while WHY? runs."
+              : "Windows did not give permission, so the background service is still there."
+            : (change.error ?? "Windows could not complete the change."),
+        );
+        return;
+      }
+    }
     const result = await bridge.saveSettings(done);
     setSaving(false);
     if (!result.ok && !result.cancelled) {
@@ -63,9 +84,9 @@ export function SetupScreen({ initial, elevated, onDone }: Props) {
 
           {step === 1 && (
             <>
-              <h1>How WHY? runs</h1>
-              <p className="muted">To catch problems as they happen, WHY? needs to be running. These make sure it is.</p>
-              <StartupOptions value={settings} onChange={(next) => setSettings({ ...settings, ...next })} />
+              <h1>How should WHY? run?</h1>
+              <p className="muted">To catch problems as they happen, WHY? needs to be running.</p>
+              <RunModeOptions mode={mode} onMode={setMode} startup={settings} onStartup={(next) => setSettings({ ...settings, ...next })} />
             </>
           )}
 
@@ -83,14 +104,22 @@ export function SetupScreen({ initial, elevated, onDone }: Props) {
             <>
               <h1>All set</h1>
               <ul className="setup-summary">
-                <li>{settings.runAsAdmin ? "Runs as administrator, so it reads everything Windows keeps." : "Runs without administrator rights. Some sources stay limited."}</li>
-                <li>{settings.startAtLogin ? "Starts when you sign in." : "Starts only when you open it."}</li>
-                <li>{settings.keepInBackground ? "Keeps watching from the notification area after you close the window." : "Stops watching when you close the window."}</li>
+                {live ? (
+                  <li>Always watching: a background service reads everything as administrator, keeps history and notifies you, even with WHY? closed.</li>
+                ) : (
+                  <>
+                    <li>{settings.runAsAdmin ? "Runs as administrator, so it reads everything Windows keeps." : "Runs without administrator rights. Some sources stay limited."}</li>
+                    <li>{settings.startAtLogin ? "Starts when you sign in." : "Starts only when you open it."}</li>
+                    <li>{settings.keepInBackground ? "Keeps watching from the notification area after you close the window." : "Stops watching when you close the window."}</li>
+                  </>
+                )}
                 <li>{hasFocus(settings) ? `Focuses on ${focusName(settings)}.` : "Watches the whole PC."}</li>
               </ul>
+              {live && !liveInstalled && <p className="muted">Windows asks you to confirm installing the service.</p>}
+              {!live && liveInstalled && <p className="muted">The background service and its history will be removed. Windows asks you to confirm.</p>}
               {restartNeeded && <p className="muted">WHY? will restart as administrator. Windows asks you to confirm.</p>}
-              {settings.runAsAdmin && settings.startAtLogin && (
-                <p className="muted">At sign-in WHY? starts without administrator rights, so Windows does not prompt you then. Live monitoring covers everything in the background.</p>
+              {!live && settings.runAsAdmin && settings.startAtLogin && (
+                <p className="muted">At sign-in WHY? starts without administrator rights, so Windows does not prompt you then.</p>
               )}
               {error && <p className="tone-critical">{error}</p>}
             </>

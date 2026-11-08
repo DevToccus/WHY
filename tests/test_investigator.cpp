@@ -174,7 +174,7 @@ TEST_CASE("a fix attempt is followed: watching, recurred, resolved") {
     in.events.push_back(gpuReset(kNow - 3600 * 1000));
     cases = investigate(in);
     CHECK(cases[0].status == CaseStatus::Recurred);
-    CHECK(cases[0].alert == "repeating");
+    CHECK(cases[0].alert == "recurred");
 
     auto quiet = input({gpuReset(kNow - 20 * kDay)});
     quiet.overrides = {{"gpu_reset:nvlddmkm", "tried_fix", kNow - 15 * kDay}};
@@ -252,4 +252,55 @@ TEST_CASE("changes are read from events") {
     CHECK(changes[0].module == "drv.sys");
     CHECK(changes[1].kind == "driver_updated");
     CHECK(changes[2].kind == "update_installed");
+}
+
+namespace {
+Event devExit(std::int64_t timeMs, const char* code, const char* runtimeMs) {
+    static std::uint64_t record = 1'000'000;
+    Event event;
+    event.recordId = ++record;
+    event.channel = kDevChannel;
+    event.timeMs = timeMs;
+    event.provider = kDevProvider;
+    event.eventId = kDevExitEvent;
+    event.data = {{"ExitCode", code}, {"RuntimeMs", runtimeMs}, {"Label", "npm run build"}, {"Directory", "C:/dev/shop"}};
+    REQUIRE(classify(event));
+    return event;
+}
+}  // namespace
+
+TEST_CASE("a command that fails with an ordinary exit code is listed but never alerts") {
+    auto cases = investigate(input({devExit(kNow - 3 * kDay, "1", "4000"), devExit(kNow - 2 * kDay, "1", "4000"), devExit(kNow - kDay, "1", "4000")}));
+    REQUIRE(cases.size() == 1);
+    CHECK(cases[0].signal == "dev_failed");
+    CHECK(cases[0].severity == Severity::Notice);
+    CHECK(cases[0].alert.empty());
+}
+
+TEST_CASE("a command that crashes with a Windows status code is a warning") {
+    auto cases = investigate(input({devExit(kNow - kDay, "3221225477", "4000")}));
+    REQUIRE(cases.size() == 1);
+    CHECK(cases[0].severity == Severity::Warning);
+    CHECK(cases[0].title.starts_with("Command crashed"));
+    CHECK(cases[0].alert == "new");
+}
+
+TEST_CASE("a fix follows a dev command when it moves between server and command") {
+    auto in = input({devExit(kNow - 2 * kDay, "1", "4000")});
+    const std::string key = investigate(in)[0].key;
+    in.events = {devExit(kNow - 2 * kDay, "1", "60000")};  // Ran long enough to count as a server this time.
+    in.overrides = {{key, "tried_fix", kNow - kDay}};
+    auto cases = investigate(in);
+    REQUIRE(cases.size() == 1);
+    CHECK(cases[0].key != key);
+    CHECK(cases[0].status == CaseStatus::Watching);
+    CHECK(cases[0].fixedMs == kNow - kDay);
+}
+
+TEST_CASE("a process ended from outside is a forced closure, not an error") {
+    auto killed = investigate(input({devExit(kNow - kDay, "4294967295", "4000")}));
+    CHECK(killed[0].origin == "forced");
+    auto crashed = investigate(input({devExit(kNow - kDay, "3221225477", "4000")}));
+    CHECK(crashed[0].origin == "error");
+    CHECK(investigate(input({gpuReset(kNow - kDay)}))[0].origin == "error");
 }

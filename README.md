@@ -38,7 +38,7 @@ The first time it opens, WHY? asks how it should run: always as administrator, a
 | Investigation | Run `why.exe`, nothing to install | Reads what Windows has kept, in memory only, and watches while the window is open |
 | Headless collection | `why collect --out report.whyreport.json` | Same reading, no window, writes a report |
 | Report | `why report.whyreport.json`, or **Open report** | Reads a saved report, for example on a technician's PC |
-| Live | **Install Live monitoring**, or `why service install` as administrator | A background service keeps history and notifies you |
+| Live | **Always watching** in setup or Settings, or `why service install` as administrator | A background service keeps history and notifies you |
 
 Without administrator rights WHY? still reads the System log and the driver inventory. Crash dumps, the file change journal and the activity recorder need elevation, and the Status screen says what is missing.
 

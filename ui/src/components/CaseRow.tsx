@@ -1,21 +1,39 @@
 import { useActions } from "../actions";
 import * as bridge from "../bridge";
-import { alertLabels, isFixed, relativeDay, statusLabels } from "../format";
+import { alertLabels, isFixed, relativeDay, severityLabels } from "../format";
 import { useProgramIcon } from "../icons";
 import type { Case } from "../types";
 import { copyText, useContextMenu, type MenuEntry } from "./ContextMenu";
 import { Icon } from "./Icon";
 
-type Tone = Case["severity"] | "quiet" | "fixed";
+type Tone = Case["severity"] | "fixed";
 
-const toneOf = (item: Case): Tone => (isFixed(item) ? "fixed" : item.alert ? item.severity : "quiet");
+// Every case is coloured by how serious it is, old ones included. What needs a look is set apart by its edge, not its colour.
+const toneOf = (item: Case): Tone => (isFixed(item) ? "fixed" : item.severity);
 
-function SeverityBadge({ tone, small = false }: { tone: Tone; small?: boolean }) {
+// The status glyphs of a Windows 11 InfoBar: a filled circle with its symbol cut out, drawn as two layers of Segoe Fluent Icons
+// so the symbol is always centred, whatever the size.
+export type StatusTone = Tone | "unclear";
+
+const statusGlyphs: Record<StatusTone, string> = {
+  critical: "\uF13D", // StatusCircleErrorX
+  warning: "\uF13C", // StatusCircleExclamation
+  notice: "\uF13F", // StatusCircleInfo
+  fixed: "\uF13E", // StatusCircleCheckmark
+  unclear: "\uF142", // StatusCircleQuestionMark
+};
+
+export function StatusIcon({ tone, size = 16, className }: { tone: StatusTone; size?: number; className?: string }) {
   return (
-    <span className={`infobar-badge badge-${tone}${small ? " badge-small" : ""}`} aria-hidden="true">
-      {tone === "critical" ? <Icon name="dismiss" /> : tone === "fixed" ? <Icon name="ok" /> : tone === "quiet" ? "i" : "!"}
+    <span className={`status-icon status-${tone}${className ? ` ${className}` : ""}`} style={{ fontSize: size }} aria-hidden="true">
+      <span className="status-back">{"\uF136"}</span>
+      <span className="status-front">{statusGlyphs[tone]}</span>
     </span>
   );
+}
+
+function SeverityBadge({ tone, small = false }: { tone: Tone; small?: boolean }) {
+  return <StatusIcon tone={tone} size={small ? 14 : 16} className={small ? "badge-small" : undefined} />;
 }
 
 // The program a case is about, with its severity badge on the corner. Without a program, the badge alone.
@@ -70,21 +88,21 @@ export function useCaseMenu(item: Case): MenuEntry[] {
   return entries;
 }
 
-// A case as a Windows 11 InfoBar: a tinted bar with the program's icon or the severity badge, a bold title and the message.
-// Only cases that need a look are tinted; the rest are plain cards.
+// A case as a Windows 11 InfoBar: a bar tinted by severity, with the program's icon or the severity badge, the title and the message.
+// Cases that need a look also carry a coloured edge and a bold title.
 export function CaseRow({ item, now, onOpen }: { item: Case; now: number; onOpen: (key: string) => void }) {
   const tone = toneOf(item);
   const openMenu = useContextMenu();
   const menu = useCaseMenu(item);
   return (
-    <button className={`row infobar infobar-${tone}`} onClick={() => onOpen(item.key)} onContextMenu={(event) => openMenu(event, menu)}>
+    <button className={`row infobar infobar-${tone}${item.alert ? " is-alert" : ""}`} onClick={() => onOpen(item.key)} onContextMenu={(event) => openMenu(event, menu)}>
       <CaseIcon item={item} />
       <span className="row-main">
         <strong>{item.title}</strong>
         <span className="muted">{item.summary}</span>
       </span>
       <span className="row-side">
-        <span>{item.alert ? alertLabels[item.alert] : statusLabels[item.status]}</span>
+        <span>{item.alert ? alertLabels[item.alert] : severityLabels[item.severity]}</span>
         <span className="muted">{relativeDay(item.lastMs, now)}</span>
       </span>
       <Icon name="chevron" className="row-chevron" />

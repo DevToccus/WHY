@@ -45,7 +45,7 @@ export function StartupOptions({ value, onChange }: { value: Startup; onChange: 
       <SettingRow
         icon="power"
         title="Start with Windows"
-        detail="Adds WHY? to your Startup folder. It starts hidden at sign-in, without administrator rights. For full monitoring at all times, install Live monitoring from Home."
+        detail="Adds WHY? to your Startup folder. It starts hidden at sign-in, without administrator rights."
       >
         <Toggle label="Start with Windows" checked={value.startAtLogin} onChange={(startAtLogin) => onChange({ ...value, startAtLogin })} />
       </SettingRow>
@@ -56,6 +56,53 @@ export function StartupOptions({ value, onChange }: { value: Startup; onChange: 
       >
         <Toggle label="Keep running when closed" checked={value.keepInBackground} onChange={(keepInBackground) => onChange({ ...value, keepInBackground })} />
       </SettingRow>
+    </div>
+  );
+}
+
+export type RunMode = "live" | "app";
+
+const runModes: { mode: RunMode; icon: IconName; title: string; detail: string }[] = [
+  {
+    mode: "live",
+    icon: "shield",
+    title: "Always watching",
+    detail:
+      "Recommended. A small background service reads everything as administrator, keeps history and notifies you, even with WHY? closed and after a restart. Windows asks for permission once.",
+  },
+  {
+    mode: "app",
+    icon: "app",
+    title: "Only while WHY? runs",
+    detail: "Nothing is installed. WHY? reads what Windows kept each time you open it, and watches while it is running.",
+  },
+];
+
+// How WHY? runs: the background service, which covers administrator rights, sign-in and notifications by itself,
+// or the app alone, with its own three choices.
+export function RunModeOptions({
+  mode,
+  onMode,
+  startup,
+  onStartup,
+}: {
+  mode: RunMode;
+  onMode: (next: RunMode) => void;
+  startup: Startup;
+  onStartup: (next: Startup) => void;
+}) {
+  return (
+    <div className="focus-options">
+      <div className="choice-grid choice-grid-two" role="radiogroup" aria-label="How WHY? runs">
+        {runModes.map((choice) => (
+          <button key={choice.mode} role="radio" aria-checked={mode === choice.mode} className="choice" onClick={() => onMode(choice.mode)}>
+            <Icon name={choice.icon} className="choice-icon" />
+            <strong>{choice.title}</strong>
+            <span className="muted">{choice.detail}</span>
+          </button>
+        ))}
+      </div>
+      {mode === "app" && <StartupOptions value={startup} onChange={onStartup} />}
     </div>
   );
 }

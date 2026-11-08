@@ -38,9 +38,16 @@ export const statusLabels: Record<CaseStatus, string> = {
   resolved: "Has not come back",
 };
 
+export const severityLabels: Record<Severity, string> = {
+  critical: "Serious",
+  warning: "Warning",
+  notice: "Minor",
+};
+
 export const alertLabels: Record<string, string> = {
   severe: "Serious",
   repeating: "Keeps happening",
+  recurred: "Came back after your fix",
   new: "New",
   increased: "Happening more often",
 };

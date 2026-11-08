@@ -54,8 +54,9 @@ export const saveReport = () => request<ActionResult>("saveReport");
 export const openReport = () => request<ActionResult>("openReport");
 export const closeReport = () => request<ActionResult>("closeReport");
 export const restartElevated = () => request<ActionResult>("restartElevated");
-export const installLive = () => request<ActionResult>("installLive");
-export const uninstallLive = () => request<ActionResult>("uninstallLive");
+// In the browser there is no service to install; the change only pretends to succeed.
+export const installLive = (): Promise<ActionResult> => (host ? request<ActionResult>("installLive") : Promise.resolve({ ok: true }));
+export const uninstallLive = (): Promise<ActionResult> => (host ? request<ActionResult>("uninstallLive") : Promise.resolve({ ok: true }));
 
 export interface SettingsReply {
   settings: Settings;

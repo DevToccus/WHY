@@ -56,6 +56,10 @@ export interface Case {
   activity: Activity[];
   output?: string; // The end of a failed command's error output, kept by why-run. Missing in older reports.
   image?: string; // The program the case is about, for its icon.
+  // Whether it was a real error or a forced closure, and why WHY? says so. Missing in older reports.
+  origin?: "" | "error" | "forced" | "unclear";
+  originText?: string;
+  fixedMs?: number; // When the person last marked it as fixed, 0 if never.
 }
 
 export interface Coverage {

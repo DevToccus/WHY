@@ -76,13 +76,8 @@ export function StatusScreen({ state, onOpenCase, onShowCases, onShowSettings }:
             </button>
           </p>
         </div>
-        <button className="hero-action" onClick={onShowCases}>
-          <span>
-            <strong>{state.cases.length}</strong> {state.cases.length === 1 ? "case" : "cases"}
-          </span>
-          <span className="hero-action-label">
-            Open Cases <Icon name="chevron" />
-          </span>
+        <button className="hero-action" onClick={onShowCases} aria-label={`See all ${plural(state.cases.length, "case")}`}>
+          See <Icon name="chevron" />
         </button>
       </header>
 

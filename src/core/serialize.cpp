@@ -132,7 +132,10 @@ void to_json(json& j, const Case& v) {
              {"advice", advice},
              {"activity", v.activity},
              {"output", v.output},
-             {"image", v.image}};
+             {"image", v.image},
+             {"origin", v.origin},
+             {"originText", v.originText},
+             {"fixedMs", v.fixedMs}};
 }
 
 }  // namespace why

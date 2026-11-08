@@ -178,23 +178,40 @@ void describeBsod(Case& c, const Incident& latest, const std::vector<DriverInfo>
                               "No crash dump was available to name the responsible module. "
                               "Run WHY? as administrator to read dumps, if Windows kept any."});
     }
+    // 0xE2 and 0xDEADDEAD are crashes started on purpose, from the keyboard or a debugger.
+    if (latest.bugCheck == 0xE2 || latest.bugCheck == 0xDEADDEAD) {
+        c.origin = "forced";
+        c.originText = "This blue screen was started on purpose, from the keyboard shortcut or a debugger. It is not a fault.";
+        c.advice.push_back({"Nothing to fix if you started it yourself. If you did not, check for keyboard crash settings (CrashOnCtrlScroll) set by a tool.", ""});
+        return;
+    }
+    c.origin = "error";
+    c.originText = "Windows stopped itself to avoid damage. A blue screen is never caused by closing a program or the PC: it is a real fault in a driver, Windows or the hardware.";
     switch (info.hint) {
         case BugCheckHint::Hardware:
-            c.advice.push_back({"Check for overheating and unstable overclock settings, then test the hardware.", ""});
+            c.advice.push_back({"Reset the BIOS to its defaults, which turns off overclocking and XMP memory profiles, then see if it happens again.", ""});
+            c.advice.push_back({"Clean dust from fans and heatsinks and check temperatures under load.", ""});
+            c.advice.push_back({"Update the BIOS and chipset drivers from the motherboard maker's website.", ""});
             break;
         case BugCheckHint::Memory:
-            c.advice.push_back({"Test the RAM with Windows Memory Diagnostic.", "memory_diagnostic"});
+            c.advice.push_back({"Test the RAM with Windows Memory Diagnostic. Any error means a module must be replaced.", "memory_diagnostic"});
+            c.advice.push_back({"Turn off the XMP or EXPO memory profile in the BIOS: unstable memory speeds cause exactly this.", ""});
             break;
         case BugCheckHint::Storage:
-            c.advice.push_back({"Back up your data, then check the disk and its cable.", ""});
+            c.advice.push_back({"Back up your data now.", ""});
+            c.advice.push_back({"Run \"chkdsk C: /scan\" in an administrator terminal, and read the disk's health with its maker's tool.", ""});
+            c.advice.push_back({"Reseat or replace the disk's cable, or try another port.", ""});
             break;
         case BugCheckHint::Graphics:
-            c.advice.push_back({"Update or roll back the graphics driver from Device Manager.", "device_manager"});
+            c.advice.push_back({"Install the latest graphics driver from NVIDIA, AMD or Intel with the Clean installation option.", ""});
+            c.advice.push_back({"If it started after a driver update, roll it back: Device Manager, the graphics card, Properties, Driver, Roll Back Driver.", "device_manager"});
             break;
         default:
-            c.advice.push_back({"Update or roll back the driver named above from Device Manager.", "device_manager"});
+            c.advice.push_back({"Update the driver named above from its maker's website, not only Windows Update.", ""});
+            c.advice.push_back({"If it started after an update, roll it back: Device Manager, the device, Properties, Driver, Roll Back Driver.", "device_manager"});
             break;
     }
+    c.advice.push_back({"Repair Windows files: run \"sfc /scannow\", then \"DISM /Online /Cleanup-Image /RestoreHealth\" in an administrator terminal.", ""});
 }
 
 void describeRestart(Case& c, const std::vector<Incident>& incidents) {
@@ -224,8 +241,20 @@ void describeRestart(Case& c, const std::vector<Incident>& incidents) {
     c.findings.push_back({Certainty::Correlated,
                           "Common reasons are a power cut, an unstable power supply, overheating or a complete freeze. "
                           "The logs cannot tell these apart."});
-    c.advice.push_back({"If nobody turned the PC off, check the power cable, supply and temperatures.", ""});
-    c.advice.push_back({"See when this started in Reliability Monitor.", "reliability_monitor"});
+    if (powerButton) {
+        c.origin = "forced";
+        c.originText = "The power button was held down, so the PC was switched off by hand. If it had frozen first, the freeze is the real problem; "
+                       "otherwise there is nothing to fix.";
+        c.advice.push_back({"If you switched it off because it froze, look at the other cases from that moment: they show what froze it.", ""});
+    } else {
+        c.origin = "unclear";
+        c.originText = "Nobody pressed the power button, so this was not a normal switch-off. A power cut, a failing power supply, overheating "
+                       "or a complete freeze all look the same in the logs.";
+        c.advice.push_back({"If it happens under load, such as games or builds, check temperatures and the power supply first: they are the usual cause.", ""});
+        c.advice.push_back({"Update the BIOS and chipset drivers from the motherboard maker's website.", ""});
+        c.advice.push_back({"Turn off Fast Startup (Control Panel, Power Options, Choose what the power buttons do) if it happens while starting or waking.", ""});
+    }
+    c.advice.push_back({"See what else failed at the same times in Reliability Monitor.", "reliability_monitor"});
 }
 
 void describeGpu(Case& c) {
@@ -234,8 +263,11 @@ void describeGpu(Case& c) {
     c.summary = "Windows or the graphics driver reported that the GPU stopped responding.";
     c.findings.push_back({Certainty::Verified, "The graphics driver " + driver + " reported a problem " +
                                                    pluralize(c.incidents, "time", "times") + "."});
-    c.advice.push_back({"Update or roll back the graphics driver from Device Manager.", "device_manager"});
-    c.advice.push_back({"If it happens under load, check GPU temperature and power cables.", ""});
+    c.origin = "error";
+    c.originText = "The graphics card stopped answering and Windows reset its driver. Closing a program does not cause this: it is a real driver or hardware fault.";
+    c.advice.push_back({"Install the latest graphics driver from NVIDIA, AMD or Intel with the Clean installation option.", ""});
+    c.advice.push_back({"If it started after a driver update, roll it back: Device Manager, the graphics card, Properties, Driver, Roll Back Driver.", "device_manager"});
+    c.advice.push_back({"Remove any GPU overclock or undervolt, and check that the card's power cables are firmly connected.", ""});
 }
 
 void describeWhea(Case& c, bool fatal) {
@@ -244,7 +276,10 @@ void describeWhea(Case& c, bool fatal) {
                       : "A component had errors. It corrected them, but repeats can announce a failure.";
     c.findings.push_back({Certainty::Verified, "Windows Hardware Error Architecture logged this " +
                                                    pluralize(c.incidents, "time", "times") + "."});
-    c.advice.push_back({"Remove any overclock and check CPU, RAM and motherboard temperatures.", ""});
+    c.origin = "error";
+    c.originText = "The hardware itself reported this error. It cannot come from closing a program.";
+    c.advice.push_back({"Reset the BIOS to its defaults, which turns off overclocking and XMP memory profiles.", ""});
+    c.advice.push_back({"Update the BIOS from the motherboard maker's website: many of these errors are fixed by microcode updates.", ""});
     c.advice.push_back({"Test the RAM with Windows Memory Diagnostic.", "memory_diagnostic"});
 }
 
@@ -267,8 +302,17 @@ void describeDisk(Case& c, const std::string& signal) {
         c.summary = "A disk stopped responding for long enough that Windows reset it.";
     }
     c.findings.push_back({Certainty::Verified, device + ": recorded " + pluralize(c.incidents, "time", "times") + "."});
+    c.origin = "error";
+    c.originText = "The disk or Windows' storage stack reported it. It is a real fault, not caused by closing programs, although switching the PC off by force can damage the file system.";
     c.advice.push_back({"Back up important data now.", ""});
-    c.advice.push_back({"Check the disk and its cable, and read its health with the manufacturer's tool.", ""});
+    if (signal == "filesystem_corruption") {
+        c.advice.push_back({"Repair the volume: run \"chkdsk C: /f\" in an administrator terminal (use the letter of the volume) and restart when asked.", ""});
+    } else if (signal == "disk_failure_predicted") {
+        c.advice.push_back({"Replace the disk. When a disk predicts its own failure, the prediction is usually right.", ""});
+    } else {
+        c.advice.push_back({"Reseat or replace the disk's cable, or try another port: this fixes many retries and resets.", ""});
+        c.advice.push_back({"Read the disk's health with its maker's tool or CrystalDiskInfo. Replace it if it shows Caution or Bad.", ""});
+    }
 }
 
 void describeDriverLoad(Case& c) {
@@ -276,7 +320,10 @@ void describeDriverLoad(Case& c) {
     c.title = "Driver failed to load: " + driver;
     c.summary = "Windows tried to load a driver during startup and could not.";
     c.findings.push_back({Certainty::Verified, driver + " failed to load " + pluralize(c.incidents, "time", "times") + "."});
-    c.advice.push_back({"If a device is not working, look for it in Device Manager and reinstall its driver.", "device_manager"});
+    c.origin = "error";
+    c.originText = "Windows could not load this driver at startup. It is a real error, though often harmless when the driver belongs to a device or program that is gone.";
+    c.advice.push_back({"If a device is not working, open Device Manager, uninstall that device with its driver, then install the driver from the maker's website.", "device_manager"});
+    c.advice.push_back({"If every device works, the driver is probably left over from uninstalled software: reinstall or fully remove that software.", ""});
 }
 
 void describeService(Case& c) {
@@ -284,7 +331,11 @@ void describeService(Case& c) {
     c.title = "Service stopped unexpectedly: " + service;
     c.summary = "A Windows service ended without being asked to.";
     c.findings.push_back({Certainty::Verified, service + " stopped unexpectedly " + pluralize(c.incidents, "time", "times") + "."});
-    c.advice.push_back({"If something depends on this service, update or reinstall the program it belongs to.", "services"});
+    c.origin = "error";
+    c.originText = "Windows records this only when a service ends without being asked to. Stopping it yourself from Services is not logged this way.";
+    c.advice.push_back({"Update or reinstall the program the service belongs to.", ""});
+    c.advice.push_back({"In Services, open it and on the Recovery tab set it to restart on failure, so it recovers by itself.", "services"});
+    c.advice.push_back({"If it is a Windows service, run \"sfc /scannow\" in an administrator terminal to repair system files.", ""});
 }
 
 // The file name of a program, from the path the crash record gives.
@@ -300,10 +351,11 @@ void describeApp(Case& c, const Incident& latest) {
     c.summary = hang ? "The program stopped responding and was closed." : "The program closed because of an error it could not handle.";
     c.findings.push_back({Certainty::Verified, program + (hang ? " stopped responding " : " crashed ") +
                                                    pluralize(c.incidents, "time", "times") + "."});
+    std::string module, code;
     if (!hang && !latest.events.empty()) {
         const auto& last = latest.events.back();
-        const auto& module = dataOf(last, "ModuleName");
-        const auto code = toLower(dataOf(last, "ExceptionCode"));
+        module = dataOf(last, "ModuleName");
+        code = toLower(dataOf(last, "ExceptionCode"));
         std::string detail;
         if (code == "e0434352") detail = "an unhandled .NET exception";
         else if (code == "c0000005") detail = "an invalid memory access";
@@ -319,7 +371,26 @@ void describeApp(Case& c, const Incident& latest) {
         c.findings.push_back({Certainty::Verified, "Program path: " + c.subject});
         c.image = c.subject;
     }
-    c.advice.push_back({"Update or reinstall the program. If you develop it, its own logs or a debugger will show the failing code.", ""});
+    if (hang) {
+        c.origin = "error";
+        c.originText = "The program really froze. It was then closed by force, by you or by Windows at shutdown: the closing is not the problem, the freeze is.";
+        c.advice.push_back({"Update the program. Freezes often come from waiting on a slow disk, a network folder or an add-on.", ""});
+        c.advice.push_back({"If it freezes while opening or saving files in a synced or network folder, try a local folder.", ""});
+    } else {
+        c.origin = "error";
+        c.originText = "Windows records a crash only when the program fails on its own. Closing it, or ending it from Task Manager, is not logged as a crash.";
+        const std::string lowerModule = toLower(module);
+        const std::string lowerProgram = toLower(program);
+        if (code == "e0434352") {
+            c.advice.push_back({"Repair or install the .NET runtime the program needs, from Microsoft's .NET download page.", ""});
+        }
+        if (lowerModule.starts_with("msvcp") || lowerModule.starts_with("vcruntime") || lowerModule.starts_with("ucrtbase")) {
+            c.advice.push_back({"Repair the Microsoft Visual C++ Redistributable (Settings, Apps, Installed apps, Modify, Repair), or install the latest one.", ""});
+        } else if (!lowerModule.empty() && lowerModule != lowerProgram && !lowerModule.starts_with("ntdll") && !lowerModule.starts_with("kernelbase")) {
+            c.advice.push_back({"The crash happened inside " + module + ", not in the program's own code. If it belongs to an overlay, antivirus or plug-in, update or disable it.", ""});
+        }
+        c.advice.push_back({"Update or reinstall the program. If you develop it, its own logs or a debugger will show the failing code.", ""});
+    }
     c.advice.push_back({"See every crash of this program in Reliability Monitor.", "reliability_monitor"});
 }
 
@@ -341,7 +412,9 @@ void describeDefender(Case& c, const Incident& latest) {
         c.title = "Microsoft Defender real-time protection was turned off";
         c.summary = "Files were not scanned as they were opened while protection was off.";
         c.findings.push_back({Certainty::Verified, "Real-time protection was turned off " + pluralize(c.incidents, "time", "times") + "."});
-        c.advice.push_back({"If you did not turn it off, check Windows Security and scan the PC.", "windows_security"});
+        c.origin = "unclear";
+        c.originText = "Protection can be turned off by you, by another antivirus or by malware. If you did it yourself, there is nothing to fix.";
+        c.advice.push_back({"If you did not turn it off, turn it back on in Windows Security and run a full scan.", "windows_security"});
         return;
     }
 
@@ -425,6 +498,13 @@ void describeDev(Case& c, const Incident& latest) {
     char hex[16]{};
     std::snprintf(hex, sizeof(hex), "0x%08X", code);
     const std::string codeText = code > 255 ? std::string(hex) : std::to_string(code);
+    // A command that returns 1 to 255 is reporting its own failure, as a failed build or test run does: the person already
+    // saw it in the terminal. A Windows status code such as 0xC0000005 means the process itself crashed.
+    const bool crashed = !server && code > 255 && code != 0xFFFFFFFF;
+    if (crashed) {
+        c.severity = Severity::Warning;
+        c.title = "Command crashed: " + label + (folderName.empty() ? "" : " (" + folderName + ")");
+    }
     c.image = dataOf(last, "Image");
     const auto& runtime = dataOf(last, "RuntimeMs");
     const std::int64_t ranFor = std::strtoll(runtime.c_str(), nullptr, 10);
@@ -434,6 +514,10 @@ void describeDev(Case& c, const Incident& latest) {
     c.findings.push_back({Certainty::Verified, label + (server ? " stopped with an error " : " failed ") + pluralize(c.incidents, "time", "times") + "."});
     const std::string meaning = exitCodeMeaning(code);
     c.findings.push_back({Certainty::Verified, "Exit code " + codeText + (meaning.empty() ? "." : ": " + meaning + ".")});
+    if (!server && !crashed) {
+        c.findings.push_back({Certainty::Verified, "The command ended on its own with an error code, the way a failed build or test does. "
+                                                   "It is listed here but never asks for your attention."});
+    }
     if (const auto& command = dataOf(last, "CommandLine"); !command.empty()) c.findings.push_back({Certainty::Verified, "Command: " + command});
     if (!folder.empty()) c.findings.push_back({Certainty::Verified, "Folder: " + folder});
 
@@ -454,6 +538,30 @@ void describeDev(Case& c, const Incident& latest) {
     }
     if (code == 134 || code == 0xC0000409) {
         c.advice.push_back({"If the output mentions heap out of memory, raise Node's limit with NODE_OPTIONS=--max-old-space-size=4096 or look for a leak.", ""});
+    }
+    if (code == 0xC0000005) {
+        c.advice.push_back({"A native module crashed. Delete node_modules and reinstall, or run \"npm rebuild\", so it matches your Node version.", ""});
+    }
+    if (code == 0xC0000142) {
+        c.advice.push_back({"Reinstall the runtime (Node, Python, .NET) the command uses: a DLL it needs is missing or broken.", ""});
+    }
+
+    // Ctrl+C never reaches this point. What is left is either a real failure or the process being killed from outside.
+    if (code == 0xFFFFFFFF) {
+        c.origin = "forced";
+        c.originText = "It was ended from outside, by End task, taskkill or another tool. It did not fail by itself.";
+    } else if (code > 255) {
+        c.origin = "error";
+        c.originText = "Exit code " + codeText + " is a Windows crash code: the process itself crashed. Closing it never produces this code.";
+    } else if (!c.output.empty()) {
+        c.origin = "error";
+        c.originText = "It printed an error before exiting with code " + codeText + ", so it failed by itself. The output above shows why.";
+    } else if (code == 1) {
+        c.origin = "unclear";
+        c.originText = "Exit code 1 means a failure, but \"taskkill /F\" and some tools also end processes with code 1. Without its output WHY? cannot tell which.";
+    } else {
+        c.origin = "error";
+        c.originText = "It chose exit code " + codeText + " itself, which is how programs report a failure. Closing it with Ctrl+C is not counted.";
     }
 }
 
@@ -543,15 +651,29 @@ void linkChanges(Case& c, const std::string& stem, const std::vector<Change>& ch
     }
 }
 
+// The part of a key that stays the same for one problem. A blue screen read without its dump has no module, and a dev
+// command moves between "server" and "command" with how long it ran; a fix must still follow it.
+std::string fixFamily(const std::string& key) {
+    if (key.starts_with("bsod:")) {
+        const auto second = key.find(':', 5);
+        return second == std::string::npos ? key : key.substr(0, second);
+    }
+    if (key.starts_with("dev_crash:")) return "dev:" + key.substr(10);
+    if (key.starts_with("dev_failed:")) return "dev:" + key.substr(11);
+    return key;
+}
+
 void applyStatusAndAlert(Case& c, const std::vector<Incident>& incidents, const InvestigationInput& input) {
     const auto now = input.nowMs;
     c.longRunning = now - c.firstMs >= kLongRunningAfter && c.incidents >= 4;
 
     const CaseOverride* latest = nullptr;
     for (const auto& item : input.overrides) {
-        if (item.key == c.key && (!latest || item.atMs >= latest->atMs)) latest = &item;
+        const bool same = item.key == c.key || fixFamily(item.key) == fixFamily(c.key);
+        if (same && (!latest || item.atMs >= latest->atMs)) latest = &item;
     }
     if (latest && latest->action == "tried_fix") {
+        c.fixedMs = latest->atMs;
         const bool recurred = std::any_of(incidents.begin(), incidents.end(), [&](const Incident& incident) {
             return incident.startMs() > latest->atMs;
         });
@@ -565,10 +687,12 @@ void applyStatusAndAlert(Case& c, const std::vector<Incident>& incidents, const 
     }
 
     if (c.status == CaseStatus::Recurred) {
-        c.alert = "repeating";
+        c.alert = "recurred";
         return;
     }
     if (c.status != CaseStatus::Open || now - c.lastMs >= kRecentWindow) return;
+    // An ordinary failed command is the person's own feedback loop, not a problem with the PC.
+    if (c.signal == "dev_failed" && c.severity == Severity::Notice) return;
 
     const int recent = c.incidentsLast7Days;
     const auto earlierSpan = std::max<std::int64_t>(now - kRecentWindow - c.firstMs, kDay);
