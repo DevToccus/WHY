@@ -32,6 +32,7 @@ jobs:
           }
           "version=$version" >> $env:GITHUB_OUTPUT
           "name=WHY - $codename" >> $env:GITHUB_OUTPUT
+          "codename=$codename" >> $env:GITHUB_OUTPUT
 
       - uses: actions/setup-node@v4
         with:
@@ -47,24 +48,50 @@ jobs:
       - name: Test
         run: ./build/release/why_tests.exe
 
+      # why.exe and why-run.exe on their own, the same two in a ready-to-run zip with the README, and one checksum file.
       - name: Prepare files
         run: |
-          New-Item -ItemType Directory dist | Out-Null
-          Copy-Item build/release/why.exe dist/why.exe
-          $hash = (Get-FileHash dist/why.exe -Algorithm SHA256).Hash.ToLowerInvariant()
-          "$hash  why.exe" | Set-Content dist/why.exe.sha256 -NoNewline
+          New-Item -ItemType Directory dist, bundle | Out-Null
+          Copy-Item build/release/why.exe, build/release/why-run.exe dist/
+          Copy-Item build/release/why.exe, build/release/why-run.exe, README.md bundle/
+          $zip = "WHY-$env:GITHUB_REF_NAME.zip"
+          Compress-Archive -Path bundle/* -DestinationPath "dist/$zip"
+          $lines = foreach ($file in Get-ChildItem dist -File | Sort-Object Name) {
+            "$((Get-FileHash $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant())  $($file.Name)"
+          }
+          $lines -join "`n" | Set-Content dist/SHA256SUMS.txt -NoNewline
 
+      # The notes are the "What's new in <code name>" section of the README, so they are written once, in the repository.
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_NAME: ${{ steps.version.outputs.name }}
           RELEASE_VERSION: ${{ steps.version.outputs.version }}
+          RELEASE_CODENAME: ${{ steps.version.outputs.codename }}
         run: |
-          $notes = @"
-          $env:RELEASE_NAME, version $env:RELEASE_VERSION.
-
-          Built from commit $env:GITHUB_SHA. See VERSIONS.md for how to get this version again.
-
-          The executable is not signed yet, so SmartScreen may warn when it first runs.
-          "@
-          gh release create $env:GITHUB_REF_NAME dist/why.exe dist/why.exe.sha256 --title $env:RELEASE_NAME --notes $notes
+          $readme = Get-Content README.md -Raw
+          $section = [regex]::Match($readme, "(?ms)^## What's new in $([regex]::Escape($env:RELEASE_CODENAME))\s*\r?\n(.*?)(?=^## |\z)").Groups[1].Value.Trim()
+          if (-not $section) {
+            Write-Error "README.md has no ""What's new in $env:RELEASE_CODENAME"" section."
+            exit 1
+          }
+          $notes = @(
+            "**$env:RELEASE_NAME**, version $env:RELEASE_VERSION.",
+            "",
+            "## What's new",
+            "",
+            $section,
+            "",
+            "## Downloads",
+            "",
+            "- **why.exe**: the app. It runs as it is, nothing to install.",
+            "- **why-run.exe**: starts a dev command so WHY? keeps the error it prints, for example ``why-run npm run dev``. Keep it next to why.exe or on your PATH.",
+            "- **WHY-$env:GITHUB_REF_NAME.zip**: both programs and the README, ready to unpack.",
+            "- **SHA256SUMS.txt**: checksums of every file above.",
+            "",
+            "The programs are not signed yet, so SmartScreen may warn the first time they run.",
+            "",
+            "Built from commit $env:GITHUB_SHA. See VERSIONS.md for how to get this version again."
+          ) -join "`n"
+          $notes | Set-Content notes.md
+          gh release create $env:GITHUB_REF_NAME (Get-ChildItem dist -File).FullName --title $env:RELEASE_NAME --notes-file notes.md --latest

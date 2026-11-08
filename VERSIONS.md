@@ -4,7 +4,7 @@ Each version of WHY? has a code name. The project owner chooses it and decides w
 
 | Code name | Full name | Version | Tag | Released |
 | --- | --- | --- | --- | --- |
-| Vigil | WHY - Vigil | 2.0.0 | `v2.0.0-vigil` | Not released yet |
+| Vigil | WHY - Vigil | 2.0.0 | `v2.0.0-vigil` | 2026-11-08 |
 | Triage | WHY - Triage | 0.1.0 | `v0.1.0-triage` | 2026-11-03 |
 
 The jump from 0.1.0 to 2.0.0 is deliberate: Vigil is the second named version, and its major number says so.
@@ -17,7 +17,9 @@ Download the build as it was released:
 gh release download v0.1.0-triage --repo DevToccus/WHY
 ```
 
-Each release holds `why.exe` and its SHA-256 checksum, under **Releases** on GitHub.
+From Vigil on, each release holds `why.exe`, `why-run.exe`, a zip with both and the README, and `SHA256SUMS.txt`, under **Releases** on GitHub. Triage holds `why.exe` and its checksum only.
+
+The release notes are the "What's new in <code name>" section of the README, so that section must exist before the tag is pushed.
 
 Or get the source of that version and build it:
 

@@ -1,8 +1,26 @@
-# WHY?
+<p align="center">
+  <img src="docs/images/logo.png" alt="WHY? icon: a blue and white capsule" width="160" height="160">
+</p>
 
-Current version: **WHY - Vigil** (2.0.0). Each version has a code name and its own release. [VERSIONS.md](VERSIONS.md) lists them and explains how to get a specific one.
+<h1 align="center">WHY?</h1>
 
-WHY? watches a Windows PC, notices problems with drivers, hardware and software, and explains what caused them, with the evidence and a fix to try. It only observes: it never changes, fixes or blocks anything.
+<p align="center">
+  <strong>When your PC or your code fails, find out why: what happened, whether it was a real error, and what to try.</strong>
+</p>
+
+<p align="center">
+  WHY? watches a Windows PC and the programs you build. It notices problems with drivers, hardware and software, and explains what caused them, with the evidence and a fix to try. It only observes: it never changes, fixes or blocks anything.
+</p>
+
+<p align="center">
+  <img alt="version 2.0.0 Vigil" src="https://img.shields.io/badge/version-2.0.0%20Vigil-6e56cf">
+  <img alt="Windows 10 and 11 only" src="https://img.shields.io/badge/platform-Windows%2010%20%C2%B7%2011%20only-0078d4">
+  <img alt="runs on this PC only" src="https://img.shields.io/badge/runs-this%20PC%20only-e67e22">
+  <img alt="telemetry none" src="https://img.shields.io/badge/telemetry-none-2d2d2d">
+  <img alt="changes nothing" src="https://img.shields.io/badge/changes-nothing-2e8b57">
+</p>
+
+WHY? runs on Windows only: it reads the Windows event logs, crash dumps, the driver store and the NTFS change journal, which exist on no other system. Each version has a code name and its own release; [VERSIONS.md](VERSIONS.md) lists them and explains how to get a specific one.
 
 ![Home: what needs a look, with an overview of the last month](docs/images/home.png)
 
@@ -24,6 +42,8 @@ The screenshots show the invented sample data the interface uses during developm
 - **Fixes that hold.** A case marked as fixed stays fixed when its details shift, for example a blue screen read without its dump. If it really comes back, WHY? says so: "Came back after your fix".
 - **Quieter failed commands.** A build or test run that exits with code 1 to 255 is listed as minor and never asks for your attention. A Windows crash code, such as `0xC0000005`, is still a warning.
 - **Opens reliably after sign-in.** When WHY? starts hidden at sign-in, its window is created when you first open it, so it no longer appears blank.
+- **why-run in every download.** Each release now ships why-run.exe next to why.exe, alone and in a ready-to-run zip.
+- **A new icon** for the new version.
 
 ## Cases
 
@@ -37,6 +57,17 @@ A case groups every occurrence of one problem. Open one to see what happened, wh
 
 **Mark as fixed** tells WHY? you tried a fix. It changes nothing on your PC: WHY? keeps watching and tells you if the problem comes back.
 
+## Download
+
+Get the latest version from **Releases** on GitHub:
+
+- **why.exe**: the app. It runs as it is, nothing to install.
+- **why-run.exe**: the wrapper for dev commands described below.
+- **`WHY-v<version>-<code name>.zip`**: both programs and this README, ready to unpack.
+- **SHA256SUMS.txt**: checksums of every file.
+
+The programs are not signed yet, so SmartScreen may warn the first time they run. The "Source code" archives GitHub adds to every release hold the source, not the programs.
+
 ## Development tools
 
 WHY? also watches what you build. Node, Bun, Deno, Python, .NET, Java, Go, Cargo, Ruby and PHP processes that exit with an error become cases: a dev server that stops after running a while, or a command such as a build or a test run that fails. Ctrl+C is not counted, and a process ended from outside is reported as a forced closure.
@@ -49,6 +80,8 @@ why-run python -m uvicorn main:app --reload
 ```
 
 The command runs as usual, with its colours and shortcuts. If it fails, the end of its error output is kept in `%LOCALAPPDATA%\WHY\runs` and shown in the case, whether or not WHY? was open. Put `why-run.exe` somewhere on your PATH to use it from any folder.
+
+why-run is a separate program on purpose: `why.exe` is a window program, so a terminal does not wait for it or show its output, while why-run is a console program that stays attached to the terminal it runs in.
 
 ## Setup and Focus
 
