@@ -5,3 +5,5 @@ ui/dist/
 *.whyreport.json
 .claude/
 ui/public/
+.serena/
+graphify-out/

@@ -18,6 +18,7 @@
   <img alt="runs on this PC only" src="https://img.shields.io/badge/runs-this%20PC%20only-e67e22">
   <img alt="telemetry none" src="https://img.shields.io/badge/telemetry-none-2d2d2d">
   <img alt="changes nothing" src="https://img.shields.io/badge/changes-nothing-2e8b57">
+  <img alt="license source-available" src="https://img.shields.io/badge/license-source--available-b03a2e">
 </p>
 
 <p align="center">
@@ -25,7 +26,8 @@
   <a href="#what-why-does">What it does</a> ·
   <a href="#why-for-developers">For developers</a> ·
   <a href="#why-you-can-trust-it">Privacy</a> ·
-  <a href="#build-why-yourself">Build</a>
+  <a href="#build-why-yourself">Build</a> ·
+  <a href="#license">License</a>
 </p>
 
 ![WHY? Home: what needs a look, with an overview of the last month](docs/images/home.png)
@@ -160,6 +162,10 @@ Without administrator rights WHY? still reads the Windows logs and the driver li
 - **why-run in every download**, and a new icon.
 
 Every version has a code name and its own release. [VERSIONS.md](VERSIONS.md) lists them and explains how to get a specific one.
+
+## License
+
+WHY? is **source-available**, not open source. You may read the code, build it and run it on your own computers. You may not redistribute it or publish a modified version, not even one that only fixes a bug: fixes and improvements are welcome as pull requests to this repository. See [LICENSE](LICENSE) for the terms, [CONTRIBUTING.md](CONTRIBUTING.md) to contribute, and [SECURITY.md](SECURITY.md) to report a vulnerability.
 
 ## Build WHY yourself
 

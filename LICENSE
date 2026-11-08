@@ -1,0 +1,96 @@
+WHY? Source-Available License
+Version 1.0
+
+Copyright (c) 2026 DevToccus. All rights reserved.
+
+The source code of WHY? ("the Software") is published so that people can read
+it, check what it does, and help improve it. It is not open source. Everything
+not expressly allowed below is reserved by the copyright holder ("the Owner").
+
+
+1. What you may do
+
+   a. Read and study the source code.
+
+   b. Build the Software from this source code and run it, or run the official
+      releases published by the Owner, on computers you own or control, for
+      your own personal or internal use.
+
+   c. Make changes to your local copy for the sole purpose of preparing a
+      contribution to the official repository, as described in section 3.
+
+   d. Fork the repository on GitHub, as the GitHub Terms of Service allow,
+      only to prepare and submit a contribution under section 3.
+
+
+2. What you may not do
+
+   a. Distribute, publish, share, sell, rent, lend or sublicense the Software,
+      in source or compiled form, in whole or in part, including the official
+      releases. Point people to the official repository instead.
+
+   b. Distribute or publish a modified version of the Software, a derivative
+      work, or any change to it, including bug fixes, security fixes and
+      patches, in any form and by any means other than submitting it to the
+      Owner under section 3.
+
+   c. Offer the Software, or a modified version of it, as a hosted or managed
+      service to others.
+
+   d. Use the name "WHY?", its code names or its icon for another product, or
+      in a way that suggests the Owner endorses you.
+
+   e. Remove or alter this license, the copyright notice or any other notice
+      in the Software.
+
+
+3. Contributions
+
+   Fixes and improvements are welcome, and they go to the Owner. The only way
+   to share a change to the Software is to submit it to the official
+   repository, for example as a pull request or a report with a patch.
+
+   By submitting a contribution you:
+
+   a. grant the Owner a perpetual, worldwide, irrevocable, royalty-free and
+      non-exclusive license to use, copy, modify, publish, distribute,
+      sublicense and relicense your contribution, as part of the Software or
+      otherwise, under any terms the Owner chooses;
+
+   b. confirm that the contribution is your own work, or that you have the
+      right to grant this license, and that it does not knowingly infringe
+      anyone else's rights;
+
+   c. accept that the Owner may use, change or decline the contribution, and
+      is under no obligation to credit, pay for or publish it.
+
+   A submitted contribution does not give you any right to distribute the
+   Software or a modified version of it.
+
+
+4. No warranty
+
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+   IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+   FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+
+
+5. Limitation of liability
+
+   IN NO EVENT SHALL THE OWNER BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+   LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+   FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+   DEALINGS IN THE SOFTWARE.
+
+
+6. Termination
+
+   If you break any term of this license, your rights under it end
+   automatically. You must then stop using the Software and delete every copy
+   and modified version you hold.
+
+
+7. Changes to this license
+
+   The Owner may publish a new version of this license. Each release of the
+   Software is governed by the license included with it.
