@@ -33,7 +33,7 @@ const navigation: { id: Screen; label: string; icon: IconName }[] = [
   { id: "changes", label: "What changed", icon: "changes" },
 ];
 
-// "v0.1.0 · Triage": the code name without the "WHY -" the brand already shows.
+// "v2.0.0 · Vigil": the code name without the "WHY -" the brand already shows.
 function versionLine(state: State) {
   const codename = (state.releaseName ?? "").replace(/^WHY\??\s*[-–]\s*/i, "");
   const version = /^\d/.test(state.appVersion ?? "") ? `v${state.appVersion}` : state.appVersion;

@@ -1,6 +1,6 @@
 {
   "name": "why",
-  "version-string": "0.1.0",
+  "version-string": "2.0.0",
   "builtin-baseline": "77da1ac07d85b552d6026b8747e8b157f79fa92e",
   "dependencies": ["sqlite3", "nlohmann-json", "wil", "webview2", "catch2"]
 }

@@ -4,7 +4,10 @@ Each version of WHY? has a code name. The project owner chooses it and decides w
 
 | Code name | Full name | Version | Tag | Released |
 | --- | --- | --- | --- | --- |
+| Vigil | WHY - Vigil | 2.0.0 | `v2.0.0-vigil` | Not released yet |
 | Triage | WHY - Triage | 0.1.0 | `v0.1.0-triage` | 2026-11-03 |
+
+The jump from 0.1.0 to 2.0.0 is deliberate: Vigil is the second named version, and its major number says so.
 
 ## Getting a specific version
 
@@ -26,14 +29,14 @@ Then follow "Building" in the README.
 
 ## How versions are named
 
-Tags have the form `v<version>-<code name>`, in lower case: `v0.1.0-triage`.
+Tags have the form `v<version>-<code name>`, in lower case: `v2.0.0-vigil`.
 
 | Part | Where it is set | When it changes |
 | --- | --- | --- |
 | Code name | `WHY_CODENAME` in `CMakeLists.txt` | When the owner names a new version |
 | Version | `project(WHY VERSION ...)` in `CMakeLists.txt` | With every release |
 
-A fix to a named version keeps its code name and raises the version: `v0.1.1-triage`.
+A fix to a named version keeps its code name and raises the version: `v2.0.1-vigil`.
 
 ## Publishing a release
 
@@ -42,8 +45,8 @@ A fix to a named version keeps its code name and raises the version: `v0.1.1-tri
 3. Push the tag:
 
 ```bash
-git tag -a v0.1.0-triage -m "WHY - Triage 0.1.0"
-git push origin v0.1.0-triage
+git tag -a v2.0.0-vigil -m "WHY - Vigil 2.0.0"
+git push origin v2.0.0-vigil
 ```
 
 The `Release` workflow then checks that the tag matches `CMakeLists.txt`, builds from that exact commit, runs the tests and publishes the release. A tag that does not match publishes nothing.

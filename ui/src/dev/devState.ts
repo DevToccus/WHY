@@ -326,8 +326,8 @@ const moreCases: Case[] = [
 // Invented data, to review the screens with a case richer than whatever this PC happens to have.
 export const sample: State = {
   schema: 1,
-  appVersion: "dev",
-  releaseName: "WHY - Triage",
+  appVersion: "2.0.0",
+  releaseName: "WHY - Vigil",
   mode: "investigation",
   scanning: false,
   elevated: false,
